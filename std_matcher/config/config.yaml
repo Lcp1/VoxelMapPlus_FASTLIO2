@@ -1,33 +1,53 @@
-map_frame: map
-ds_size: 0.25
-sub_frame_num: 10
-odom_cloud_topic: /lio_node/cloud_with_odom
+# std_matcher 后端参数: STD(Stable Triangle Descriptor) 回环检测 + GTSAM 位姿图优化
+# 由 pgo_node.cpp 的 loadParams() 用 nh.param 读取, 加载方式见 std_matcher/launch/pgo.launch
+# 本文件的键序与 loadParams() 中的读取顺序一致, 便于对照代码
+# 括号内为代码中的默认值, 即本文件删掉该键时的取值
 
-voxel_size: 1.0
-voxel_min_point: 10
-voxel_plane_thresh: 0.01
-norm_merge_thresh: 0.1
+# ---------- 数据源与坐标系 ----------
+map_frame: map                                   # 位姿图与 TF 的坐标系名(默认 map)
+ds_size: 0.25                                    # 关键帧点云的降采样体素边长(米), STD 提取前的预处理(默认 0.25)
+sub_frame_num: 10                                # 每 10 帧前端点云拼成一个关键帧(子图), 关键帧号 = 帧号 / sub_frame_num
+odom_cloud_topic: /lio_node/cloud_with_odom      # 订阅前端发布的话题, 消息类型 interface/PointCloudWithOdom(默认 /lio_node/cloud_with_odom)
 
-proj_2d_resolution: 0.25
-proj_min_dis: 0.0
-proj_max_dis: 5.0
+# ---------- 平面体素提取(STDManager::buildVoxels / buildConnections) ----------
+voxel_size: 1.0            # 划分体素的边长(米), 在每个体素内拟合平面(默认 1.0)
+voxel_min_point: 10        # 体素内点数 <= 该值时直接跳过, 不参与平面拟合(默认 10)
+voxel_plane_thresh: 0.01   # 平面判定: 体素点云协方差的最小特征值 < 该值才算平面(默认 0.01)
+norm_merge_thresh: 0.1     # 法向量一致性阈值, 用于同体素内多个平面方向的合并, 也用于几何验证(默认 0.1)
 
-nms_2d_range: 5
-nms_3d_range: 2.0
-corner_thresh: 10.0
-max_corner_num: 100
-min_side_len: 2.0
-max_side_len: 30.0
-desc_search_range: 15
+# ---------- 平面投影成 2D 图像(STDManager::nms2d) ----------
+proj_2d_resolution: 0.25   # 投影图像每个像素的边长(米)(默认 0.25)
+proj_min_dis: 0.0          # 只保留到平面距离落在 [proj_min_dis, proj_max_dis] 内的点参与投影(默认 0.0001)
+proj_max_dis: 5.0          # 投影点到平面距离的上限(米)(默认 5.0)
+# NOTE: pgo_node.cpp 读取 max_side_len 时把值写进了 proj_max_dis 字段(疑为复制粘贴笔误),
+#       会覆盖上面刚读到的 proj_max_dis。所以本项当前实际不生效, 投影距离上限由 max_side_len 的 30.0 决定。
 
-side_resolution: 0.2
-rough_dis_threshold: 0.03
-skip_near_num: 50
-vertex_diff_threshold: 0.7
-candidate_num: 50
-verify_dis_thresh: 3.0
-geo_verify_dis_thresh: 0.3
-icp_thresh: 0.6
+# ---------- 角点(三角形顶点)提取与两次 NMS ----------
+nms_2d_range: 5            # 2D 图像上非极大值抑制的窗口边长(单位: 像素), 同时也是网格边长 = nms_2d_range * proj_2d_resolution(默认 5)
+nms_3d_range: 2.0          # 3D 空间非极大值抑制的搜索半径(米), 用 KdTree 半径搜索(默认 2.0)
+corner_thresh: 10.0        # 角点判定阈值: 投影图像中梯度最大值 >= 该值才作为角点候选(默认 10.0)
+max_corner_num: 100        # 每帧保留的角点数量上限, 超出时按 intensity 降序取前 N 个(默认 100)
+min_side_len: 2.0          # 构成三角形的边长下限(米), 任一边超范围则丢弃该三角形(默认 2.0)
+max_side_len: 30.0         # 构成三角形的边长上限(米)(默认 30.0)
+                           # NOTE: 本项被读进了 proj_max_dis 字段(见上方), descriptor 内部的 max_side_len 恒为默认 30.0
+desc_search_range: 15      # 构建三角形时对每个角点做 KNN 的近邻个数 k, 即在此范围内两两组合成三角形(默认 15)
 
-iter_eps: 0.001
-max_iter: 10
+# ---------- 三角形描述子的构建与检索 ----------
+side_resolution: 0.2       # 边长的量化分辨率(米), 决定描述子哈希桶的粒度(默认 0.2)
+rough_dis_threshold: 0.03  # 描述子粗筛的相对阈值: 量化后边长向量之差的范数 >= 该相对阈值则丢弃(默认 0.03)
+skip_near_num: 50          # 跳过关键帧 ID 之差 <= 该值的候选, 避免与时间上太近的关键帧形成回环(默认 50)
+# NOTE: pgo_node.cpp 用帧号 cloud_idx 与本项比较, 而 descriptor 内部是按关键帧 ID 之差比较,
+#       两者相差 sub_frame_num 倍, 量纲不一致。
+vertex_diff_threshold: 0.7 # 顶点强度相对差阈值 2|a-b|/|a+b|, 超过则丢弃该候选(默认 0.7)
+candidate_num: 50          # 进入几何验证的候选数量上限(默认 50)
+verify_dis_thresh: 3.0     # 顶点验证: 经三角形解算出的位姿变换后, 顶点距离 < 该值才算配对成功(米)(默认 3.0)
+                           # 投票数 < 4 的候选直接判为失败(该 4 为代码硬编码)
+geo_verify_dis_thresh: 0.3 # 平面几何验证的点到面距离阈值(米)(默认 0.3)
+icp_thresh: 0.6            # 回环接受阈值: verifyGeoPlane 返回的平面点匹配比例(0~1)大于该值才认为回环有效(默认 0.5)
+                           # NOTE: 名字里有 icp, 但比较的其实是匹配比例, 与 verifyGeoPlaneICP 的 ICP 残差无关
+
+# ---------- 迭代参数(descriptor 内部 ICP: verifyGeoPlaneICP) ----------
+iter_eps: 0.001            # 迭代收敛阈值(默认 0.001)
+                           # NOTE: 判据是 delta.maxCoeff() < iter_eps, 取的是最大带符号分量而非绝对值
+max_iter: 10               # 最大迭代次数(默认 10)
+# NOTE: pgo_node.cpp 并未读取 max_iter 这个键(只读了 iter_eps), 所以改这里不会生效, 实际用的是结构体默认值 10

@@ -1,19 +1,27 @@
-lidar_topic: /livox/lidar
-imu_topic: /livox/imu
+# voxel_plus 前端 LIO 参数(由 lio_node.cpp 用 nh.param 读取)
+# 注意: 当前没有任何 launch 文件引用本文件, 加载的是同目录的 mapping.yaml
+#       (两者内容目前完全一致)。如需使用本文件, 请把 launch 里的
+#       rosparam file 改成 config/office.yaml, 或直接运行时用 _config 参数指定。
 
-map_frame: lidar
-body_frame: body
+# ---------- 数据源 ----------
+lidar_topic: /livox/lidar        # 订阅的雷达话题(默认 /livox/lidar)
+imu_topic: /livox/imu            # 订阅的 IMU 话题(默认 /livox/imu)
 
-publish_voxel_map: true
-publish_voxel_num: 2000
+# ---------- 坐标系名称 ----------
+map_frame: lidar                 # 地图/世界坐标系名(默认 map)
+body_frame: body                 # 机体系名称(默认 body)
 
+# ---------- 可视化 ----------
+publish_voxel_map: true          # 是否把体素平面发布成 MarkerArray 供 rviz 显示(默认 false)
+publish_voxel_num: 2000          # 每次最多发布多少个体素(默认 1000)
 
-scan_resolution: 0.1
-voxel_size: 0.4
-map_capacity: 100000
-max_point_thresh: 100
-update_size_threshes: 20
-merge_thresh_for_angle: 0.2
-merge_thresh_for_distance: 0.04
-
-
+# ---------- 地图与平面拟合 ----------
+scan_resolution: 0.1             # 输入点云的体素降采样边长, 传给 pcl::VoxelGrid(默认 0.1)
+voxel_size: 0.4                  # 地图体素边长, 越小地图越细但内存/耗时越高(默认 0.4)
+map_capacity: 100000             # 地图体素数量上限, 超出后按 LRU 淘汰最久未用的体素(默认 100000)
+max_point_thresh: 100            # 单个体素保留的点数上限, 达到后冻结该平面并释放点缓存(默认 100)
+# NOTE: 键名与代码不一致! lio_node.cpp 读取的是单数形式 "update_size_thresh"(默认 10),
+#       所以这里的 update_size_threshes 永远不会被读到, 实际生效值是默认的 10。
+update_size_threshes: 20         # 意图: 每新增多少个点重算一次平面(对应 VoxelGrid::update_point_thresh)
+merge_thresh_for_angle: 0.2      # 体素间平面合并的法向夹角阈值, 形式为 1-cos(theta)(默认 0.1)
+merge_thresh_for_distance: 0.04  # 体素间平面合并的原点到平面距离差阈值(默认 0.04)

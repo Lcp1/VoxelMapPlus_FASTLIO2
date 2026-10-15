@@ -1,6 +1,10 @@
+<!-- 仅前端的建图/里程计启动文件: 启动 lio_node 与 rviz -->
 <launch>
+    <!-- LIO 前端节点; output="screen" 让日志直接打印到终端 -->
+    <!-- 参数从 voxel_plus/config/mapping.yaml 全体加载(参数名见该文件注释) -->
     <node pkg="voxel_plus" type="lio_node" name="lio_node" output="screen">
         <rosparam command="load" file="$(find voxel_plus)/config/mapping.yaml" />
     </node>
+    <!-- 可视化; nice 降低优先级, 避免 rviz 抢占 LIO 主线程的 CPU -->
     <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find voxel_plus)/rviz/default.rviz" />
 </launch>
