@@ -122,6 +122,9 @@ namespace lio
         int update_point_thresh;
         double plane_thresh;
         double voxel_size;
+        // 残差门限的绝对下限(米): 3sigma 门限在点云无逐点去畸变/体素量化误差下偏紧,
+        // 位姿一旦滞后就会把能反映误差的点全部剔除, 导致状态卡死
+        double max_residual = 0.5;
         Featmap featmap;
         std::list<VoxelKey> cache;
         int capacity;

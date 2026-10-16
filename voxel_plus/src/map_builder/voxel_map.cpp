@@ -163,8 +163,8 @@ namespace lio
                        tn1 = near_node->plane->cov.block<3, 3>(0, 0).trace(),
                        tm1 = near_node->plane->cov.block<3, 3>(3, 3).trace();
                 double tc0 = tn0 + tm0, tc1 = tn1 + tm1;
-                Eigen::Vector3d new_mean = tm0 * near_node->plane->mean + tm1 * plane->mean / (tm0 + tm1);
-                Eigen::Vector3d new_norm = tn0 * near_node->plane->norm + tn1 * plane->norm / (tn0 + tn1);
+                Eigen::Vector3d new_mean = (tm0 * near_node->plane->mean + tm1 * plane->mean) / (tm0 + tm1);
+                Eigen::Vector3d new_norm = (tn0 * near_node->plane->norm + tn1 * plane->norm) / (tn0 + tn1);
                 Eigen::Matrix<double, 6, 6> new_cov = (tc0 * tc0 * near_node->plane->cov + tc1 * tc1 * plane->cov) / ((tc0 + tc1) * (tc0 + tc1));
 
                 near_node->group_id = group_id;
@@ -269,7 +269,8 @@ namespace lio
             J_nq.block<1, 3>(0, 3) = -data.plane_norm;
             double sigma_l = J_nq * data.plane_cov * J_nq.transpose();
             sigma_l += data.plane_norm.transpose() * data.cov_world * data.plane_norm;
-            if (std::abs(data.residual) < 3.0 * sqrt(sigma_l))
+            double gate = std::max(3.0 * std::sqrt(sigma_l), max_residual);
+            if (std::abs(data.residual) < gate)
                 data.is_valid = true;
         }
         return data.is_valid;

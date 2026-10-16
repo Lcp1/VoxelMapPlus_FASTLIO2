@@ -93,6 +93,9 @@ namespace kf
 
         void change_P(Matrix23d &P) { P_ = P; }
 
+        // 协方差下限: 长时间静止时点云观测会让 P 无限塌缩(过度自信), 导致车辆重新运动后状态被锁死
+        void setMinCov(const Vector23d &min_cov) { min_cov_ = min_cov; }
+
         void predict(const Input &inp, double dt, const Matrix12d &Q);
 
         void update();
@@ -100,6 +103,7 @@ namespace kf
     private:
         size_t max_iter_ = 5;
         double eps_ = 0.001;
+        Vector23d min_cov_ = Vector23d::Zero();
         State x_;
         Matrix23d P_;
         measure_func func_;

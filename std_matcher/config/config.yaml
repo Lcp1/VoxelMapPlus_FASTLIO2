@@ -31,3 +31,7 @@ icp_thresh: 0.6
 
 iter_eps: 0.001
 max_iter: 10
+# 位姿近邻回环: 与历史关键帧距离<该值(米)即作为候选, 再用几何ICP验证
+loop_search_radius: 50.0
+loop_verify_num: 15
+loop_min_gap: 50

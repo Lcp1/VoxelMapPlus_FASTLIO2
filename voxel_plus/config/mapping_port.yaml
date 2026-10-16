@@ -1,0 +1,56 @@
+# 配置: 221/10-10-1 港口数据 (双雷达合并点云 /lidar_preprocessor/meta_cloud + chcnav INS)
+
+# lidar_type: livox(livox_ros_driver2::CustomMsg) / pointcloud2(sensor_msgs::PointCloud2)
+lidar_type: pointcloud2
+lidar_topic: /lidar_preprocessor/meta_cloud
+imu_topic: /ins_driver/imu
+
+# map_frame 是 LIO 的局部地图帧, 必须与 std_matcher 的全局 map 帧区分开:
+# pgo_node 会广播 "自己的 map_frame(=map) -> cloud_with_odom.header.frame_id(=这里的map_frame)",
+# 两者同名就会发出 map->map 的非法变换(tf 报 Ignoring transform ... they are the same)
+map_frame: lio_map
+body_frame: body
+
+# meta_cloud 没有逐点时间字段(只有x/y/z/intensity), 整帧按 stamp + cloud_time_offset 时刻的
+# 刚性快照处理: 10Hz 雷达取 0.05s(一帧扫描开始到结束的中点)。话题若带逐点时间字段则该参数不生效
+cloud_time_offset: 0.05
+
+range_min: 1.0
+range_max: 60.0
+filter_num: 1
+
+publish_voxel_map: true
+publish_voxel_num: 2000
+
+
+scan_resolution: 0.1
+voxel_size: 0.4
+map_capacity: 300000
+max_point_thresh: 100
+update_size_thresh: 20
+# 初始化阶段帧数: 地图刚建立时平面很少(单帧只有几十个有效点), 稀疏地图上的虚假残差会通过
+# pos-vel 耦合在单帧内注入假速度(v=dp/dt)并锁死。这期间用强先验把"速度状态"锁住, 位置/姿态
+# 仍由点云正常更新(所以运动中起步也不会把地图拖糊); 之后放开速度, 由点云序列估计
+init_frames: 10
+# init_pos_cov: 2.5e-3   # 初始化阶段位置先验方差 (0.05m)^2
+# init_rot_cov: 1e-4     # (0.01rad)^2
+# init_vel_cov: 1e-4     # (0.01m/s)^2
+# 残差门限的绝对下限(米): 默认的 3sigma 门限很紧(约0.2m), 位姿一旦滞后就会把能反映误差的
+# 点全部剔除, 造成"车走了但状态不动"。放宽到 0.5m 后仍能剔除动态物体等大残差离群点
+max_residual: 0.5
+merge_thresh_for_angle: 0.2
+merge_thresh_for_distance: 0.04
+
+# 协方差下限(方差): 防止长期静止时点云观测把 P 压到 0(过度自信), 需设 0 可关闭
+min_pos_cov: 1e-4
+min_rot_cov: 1e-6
+min_vel_cov: 2.5e-3
+min_bias_cov: 1e-8
+
+# 点云(frame_id=base_link)与IMU(frame_id=chcnav_msg_parser)同源: tf_static 里
+# base_link -> ins 平移为 0, 只有绕x轴 -0.003rad 安装角, 可忽略, 外参保持默认单位阵/零
+# r_il: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+# p_il: [0, 0, 0]
+
+# 本数据无逐点时间字段, 也不用方位角推时间(合并点云不是按扫描顺序排列)
+point_time_from_azimuth: false

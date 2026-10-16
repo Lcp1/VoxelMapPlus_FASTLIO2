@@ -540,6 +540,9 @@ namespace std_desc
         std::unordered_map<VoxelKey, VoxelNode, VoxelKey::Hasher>().swap(temp_voxels);
 
         buildVoxels(cloud);
+        int n_voxel = temp_voxels.size(), n_plane = 0;
+        for (auto &kv : temp_voxels)
+            if (kv.second.is_plane) n_plane++;
 
         buildConnections();
 
@@ -678,6 +681,7 @@ namespace std_desc
             }
         }
 
+
         for (int cnt = 0; cnt < config.candidate_num; cnt++)
         {
 
@@ -692,8 +696,9 @@ namespace std_desc
                     max_vote_index = it->first;
                 }
             }
-            if (max_vote_index < 0 || max_vote < 5)
+            if (max_vote_index < 0 || max_vote < 3) // 原为5
                 break;
+            std::cout << "[cand] id=" << max_vote_index << " desc_votes=" << max_vote << std::endl;
             STDMatch match_triangle;
             match_arr[max_vote_index] = 0;
             match_triangle.match_id = max_vote_index;
@@ -760,7 +765,8 @@ namespace std_desc
 
         // std::cout << "max vot" << max_vote << std::endl;
 
-        if (max_vote < 4) // 4
+        if (max_vote < 2) // 原为4: 重复场景(集装箱/立柱)下真回环常常只有2~3个一致三角形,
+                          // 最终由 verifyGeoPlane 的几何重合率把关, 这里放松
             return -1.0;
         auto best_pair = matches.match_pairs[max_vote_index * skip_len];
         triangleSolver(best_pair, rot, trans);
@@ -922,6 +928,8 @@ namespace std_desc
 
         std::vector<STDMatch> candidate_matcher_vec;
         selectCanidates(feature, candidate_matcher_vec);
+        std::cout << "[loop] id=" << feature.id << " descs=" << feature.descs.size()
+                  << " candidates=" << candidate_matcher_vec.size() << std::endl;
 
         for (size_t i = 0; i < candidate_matcher_vec.size(); i++)
         {
@@ -941,6 +949,8 @@ namespace std_desc
                 result.match_pairs = sucess_match_vec;
             }
         }
+        std::cout << "[loop]   best_score=" << result.match_score << " (need >" << config.icp_thresh
+                  << ") match_id=" << result.match_id << std::endl;
         if (result.match_score > config.icp_thresh)
             result.valid = true;
         return result;

@@ -1,4 +1,8 @@
 #include "utils.h"
+#include <ros/ros.h>
+#include <cstring>
+#include <cmath>
+#include <algorithm>
 
 void livox2pcl(const livox_ros_driver2::CustomMsg::ConstPtr &msg, pcl::PointCloud<pcl::PointXYZINormal>::Ptr out, int filter_num, double range_min, double range_max)
 {
@@ -25,6 +29,199 @@ void livox2pcl(const livox_ros_driver2::CustomMsg::ConstPtr &msg, pcl::PointClou
             }
         }
     }
+}
+
+static const sensor_msgs::PointField *findPointField(const sensor_msgs::PointCloud2 &msg, const std::string &name)
+{
+    for (const auto &field : msg.fields)
+    {
+        if (field.name == name)
+            return &field;
+    }
+    return nullptr;
+}
+
+static double readPointField(const uint8_t *point, const sensor_msgs::PointField &field)
+{
+    switch (field.datatype)
+    {
+    case sensor_msgs::PointField::FLOAT64:
+    {
+        double val;
+        memcpy(&val, point + field.offset, sizeof(val));
+        return val;
+    }
+    case sensor_msgs::PointField::FLOAT32:
+    {
+        float val;
+        memcpy(&val, point + field.offset, sizeof(val));
+        return val;
+    }
+    case sensor_msgs::PointField::UINT32:
+    {
+        uint32_t val;
+        memcpy(&val, point + field.offset, sizeof(val));
+        return static_cast<double>(val);
+    }
+    case sensor_msgs::PointField::INT32:
+    {
+        int32_t val;
+        memcpy(&val, point + field.offset, sizeof(val));
+        return static_cast<double>(val);
+    }
+    case sensor_msgs::PointField::UINT16:
+    {
+        uint16_t val;
+        memcpy(&val, point + field.offset, sizeof(val));
+        return static_cast<double>(val);
+    }
+    case sensor_msgs::PointField::INT16:
+    {
+        int16_t val;
+        memcpy(&val, point + field.offset, sizeof(val));
+        return static_cast<double>(val);
+    }
+    default:
+        return 0.0;
+    }
+}
+
+// 逐点时间字段换算成相对 header.stamp 的秒数: 区分绝对时间(UNIX 时间戳)与相对时间(秒/毫秒/微秒/纳秒)
+static void pointTimeToOffset(const std::vector<double> &raw_time, double stamp, std::vector<double> &offset)
+{
+    offset.resize(raw_time.size());
+    double t_min = raw_time[0], t_max = raw_time[0];
+    for (const auto &t : raw_time)
+    {
+        t_min = std::min(t_min, t);
+        t_max = std::max(t_max, t);
+    }
+    // 绝对时间(UNIX 时间戳, 秒): 直接与 header.stamp 相减
+    if (t_min > 1e8)
+    {
+        for (size_t i = 0; i < raw_time.size(); i++)
+            offset[i] = raw_time[i] - stamp;
+        return;
+    }
+    // 相对时间: 按一帧内的量级判断单位
+    double span = t_max - t_min;
+    double scale = 1.0;
+    if (span >= 2e6)
+        scale = 1e-9; // 纳秒
+    else if (span >= 2e3)
+        scale = 1e-6; // 微秒
+    else if (span >= 2.0)
+        scale = 1e-3; // 毫秒
+    for (size_t i = 0; i < raw_time.size(); i++)
+        offset[i] = raw_time[i] * scale;
+}
+
+std::pair<double, double> msg2pcl(const sensor_msgs::PointCloud2::ConstPtr &msg, pcl::PointCloud<pcl::PointXYZINormal>::Ptr out, const CloudConvertConfig &cfg)
+{
+    const double stamp = msg->header.stamp.toSec();
+    out->clear();
+    out->reserve(msg->width * msg->height / std::max(cfg.filter_num, 1) + 1);
+
+    const sensor_msgs::PointField *field_x = findPointField(*msg, "x");
+    const sensor_msgs::PointField *field_y = findPointField(*msg, "y");
+    const sensor_msgs::PointField *field_z = findPointField(*msg, "z");
+    const sensor_msgs::PointField *field_intensity = findPointField(*msg, "intensity");
+    if (field_x == nullptr || field_y == nullptr || field_z == nullptr)
+    {
+        ROS_WARN("PointCloud2 message has no x/y/z field, skip it");
+        return {stamp, stamp};
+    }
+
+    // 逐点时间字段: 优先使用配置的名字, 否则在常见命名里自动探测
+    const sensor_msgs::PointField *field_time = nullptr;
+    if (!cfg.time_field.empty())
+        field_time = findPointField(*msg, cfg.time_field);
+    else
+    {
+        for (const auto &name : {"timestamp", "time", "t", "offset_time", "time_offset", "offset"})
+        {
+            field_time = findPointField(*msg, name);
+            if (field_time != nullptr)
+                break;
+        }
+    }
+
+    const size_t point_num = static_cast<size_t>(msg->width) * msg->height;
+    std::vector<double> raw_time;
+    if (field_time != nullptr)
+        raw_time.reserve(point_num);
+    for (size_t i = 0; i < point_num; i++)
+    {
+        const uint8_t *point = msg->data.data() + i * msg->point_step;
+        if (field_time != nullptr)
+            raw_time.push_back(readPointField(point, *field_time));
+    }
+
+    // 旋转式雷达: 用方位角推算逐点时刻(相对首点方位角, 折叠到一帧内)
+    std::vector<double> azimuth_offset;
+    double first_azimuth = 0.0;
+    if (!field_time && cfg.time_from_azimuth)
+    {
+        azimuth_offset.reserve(point_num);
+        for (size_t i = 0; i < point_num; i++)
+        {
+            const uint8_t *point = msg->data.data() + i * msg->point_step;
+            double px = readPointField(point, *field_x), py = readPointField(point, *field_y);
+            double az = std::atan2(py, px) * 180.0 / M_PI;
+            if (i == 0)
+                first_azimuth = az;
+            double rel = (az - first_azimuth) * cfg.azimuth_dir;
+            while (rel < 0.0)
+                rel += 360.0;
+            while (rel >= 360.0)
+                rel -= 360.0;
+            azimuth_offset.push_back(rel / 360.0 * cfg.scan_period);
+        }
+    }
+
+    std::vector<double> time_offset;
+    double max_offset = 0.0;
+    if (!field_time && cfg.time_from_azimuth && !azimuth_offset.empty())
+    {
+        time_offset = azimuth_offset;
+        for (const auto &offset : time_offset)
+            max_offset = std::max(max_offset, offset);
+    }
+    else if (field_time != nullptr && raw_time.size() == point_num)
+    {
+        pointTimeToOffset(raw_time, stamp, time_offset);
+        for (auto &offset : time_offset)
+            offset = std::max(offset, 0.0);
+        max_offset = *std::max_element(time_offset.begin(), time_offset.end());
+    }
+
+    // 没有(或退化为常量)逐点时间: 整帧当作 stamp + snapshot_offset 时刻的刚性快照
+    const bool has_point_time = !time_offset.empty() && max_offset > 1e-6;
+    const double snapshot_time = stamp + cfg.snapshot_offset;
+
+    uint valid_num = 0;
+    for (size_t i = 0; i < point_num; i++)
+    {
+        const uint8_t *point = msg->data.data() + i * msg->point_step;
+        pcl::PointXYZINormal p;
+        p.x = readPointField(point, *field_x);
+        p.y = readPointField(point, *field_y);
+        p.z = readPointField(point, *field_z);
+        p.intensity = field_intensity != nullptr ? readPointField(point, *field_intensity) : 0.0;
+        p.curvature = has_point_time ? static_cast<float>(time_offset[i] * 1000.0) : 0.0f; // 秒 -> 毫秒
+        double sq_range = p.x * p.x + p.y * p.y + p.z * p.z;
+        if (!(sq_range > cfg.range_min * cfg.range_min && sq_range < cfg.range_max * cfg.range_max))
+            continue;
+        if ((valid_num++) % std::max(cfg.filter_num, 1) != 0)
+            continue;
+        out->push_back(p);
+    }
+
+    if (out->empty())
+        ROS_WARN("No valid point in this cloud");
+    if (!has_point_time)
+        return {snapshot_time, snapshot_time};
+    return {stamp, stamp + max_offset};
 }
 
 sensor_msgs::PointCloud2 pcl2msg(pcl::PointCloud<pcl::PointXYZINormal>::Ptr inp, const std::string &frame_id, const double &timestamp)

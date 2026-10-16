@@ -5,6 +5,11 @@ namespace lio
     void LIOBuilder::loadConfig(LIOConfig &_config)
     {
         config = _config;
+        setupEstimator();
+    }
+
+    void LIOBuilder::setupEstimator()
+    {
         status = LIOStatus::IMU_INIT;
         data_group.Q.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * config.ng;
         data_group.Q.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * config.na;
@@ -14,6 +19,7 @@ namespace lio
             scan_filter.setLeafSize(config.scan_resolution, config.scan_resolution, config.scan_resolution);
 
         map = std::make_shared<VoxelMap>(config.max_point_thresh, config.update_size_thresh, config.plane_thresh, config.voxel_size, config.map_capacity);
+        map->max_residual = config.max_residual;
 
         VoxelGrid::merge_thresh_for_angle = config.merge_thresh_for_angle;
         VoxelGrid::merge_thresh_for_distance = config.merge_thresh_for_distance;
@@ -22,7 +28,22 @@ namespace lio
         kf.set_share_function(
             [this](kf::State &s, kf::SharedState &d)
             { sharedUpdateFunc(s, d); });
+        kf.setMaxIter(config.opti_max_iter);
+        kf::Vector23d min_cov = kf::Vector23d::Zero();
+        min_cov.segment<3>(kf::IESKF::P_ID).setConstant(config.min_pos_cov);
+        min_cov.segment<3>(kf::IESKF::R_ID).setConstant(config.min_rot_cov);
+        min_cov.segment<3>(kf::IESKF::V_ID).setConstant(config.min_vel_cov);
+        min_cov.segment<3>(kf::IESKF::BG_ID).setConstant(config.min_bias_cov);
+        min_cov.segment<3>(kf::IESKF::BA_ID).setConstant(config.min_bias_cov);
+        kf.setMinCov(min_cov);
         data_group.residual_info.resize(10000);
+    }
+
+    void LIOBuilder::reset()
+    {
+        std::cout << "LIOBuilder: reset estimator and rebuild map" << std::endl;
+        data_group = LIODataGroup();
+        setupEstimator();
     }
 
     bool LIOBuilder::initializeImu(std::vector<IMUData> &imus)
@@ -40,6 +61,8 @@ namespace lio
         acc_mean /= static_cast<double>(data_group.imu_cache.size());
         gyro_mean /= static_cast<double>(data_group.imu_cache.size());
         data_group.gravity_norm = acc_mean.norm();
+        kf.x().pos.setZero();
+        kf.x().vel.setZero();
         kf.x().rot_ext = config.r_il;
         kf.x().pos_ext = config.p_il;
         kf.x().bg = gyro_mean;
@@ -52,7 +75,17 @@ namespace lio
         {
             kf.x().initG(-acc_mean);
         }
+        if (has_velocity_hint)
+        {
+            // 机体系速度提示(位姿导数得到), 转到世界系作为初速度
+            kf.x().vel = kf.x().rot * velocity_hint;
+            std::cout << "LIOBuilder: initial velocity from hint = ("
+                      << kf.x().vel.transpose() << ") m/s" << std::endl;
+        }
         kf.P().setIdentity();
+        kf.P().block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * config.init_pos_cov;
+        kf.P().block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * config.init_rot_cov;
+        kf.P().block<3, 3>(12, 12) = Eigen::Matrix3d::Identity() * config.init_vel_cov;
         kf.P().block<3, 3>(6, 6) = Eigen::Matrix3d::Identity() * 0.00001;
         kf.P().block<3, 3>(9, 9) = Eigen::Matrix3d::Identity() * 0.00001;
         kf.P().block<3, 3>(15, 15) = Eigen::Matrix3d::Identity() * 0.0001;
@@ -115,7 +148,8 @@ namespace lio
         dt = cloud_time_end - imu_time_end;
         kf.predict(inp, dt, data_group.Q);
 
-        data_group.last_imu = package.imus.back();
+        if (!package.imus.empty())
+            data_group.last_imu = package.imus.back();
         data_group.last_cloud_end_time = cloud_time_end;
 
         Eigen::Matrix3d cur_rot = kf.x().rot;
@@ -222,12 +256,28 @@ namespace lio
                 pcl::copyPointCloud(*package.cloud, *lidar_cloud);
             }
             int size = lidar_cloud->size();
+            // 点云过滤后可能超过 residual_info 的初始容量, 这里按需扩容
+            if (data_group.residual_info.size() < static_cast<size_t>(size))
+                data_group.residual_info.resize(size);
             for (int i = 0; i < size; i++)
             {
                 data_group.residual_info[i].point_lidar = Eigen::Vector3d(lidar_cloud->points[i].x, lidar_cloud->points[i].y, lidar_cloud->points[i].z);
                 calcBodyCov(data_group.residual_info[i].point_lidar, config.ranging_cov, config.angle_cov, data_group.residual_info[i].cov_lidar);
             }
+            const Eigen::Vector3d vel_prior = kf.x().vel;
             kf.update();
+            if (data_group.lio_frame_count < config.init_frames)
+            {
+                // 初始化阶段: 速度只认IMU递推, 不让点云观测通过协方差耦合改写它
+                kf.x().vel = vel_prior;
+                data_group.lio_frame_count++;
+            }
+            else if (data_group.lio_frame_count == config.init_frames)
+            {
+                // 地图已有足够平面, 放开速度让点云序列去估计
+                kf.P().block<3, 3>(kf::IESKF::V_ID, kf::IESKF::V_ID) = Eigen::Matrix3d::Identity();
+                data_group.lio_frame_count++;
+            }
             pcl::PointCloud<pcl::PointXYZINormal>::Ptr point_world = lidarToWorld(lidar_cloud);
             std::vector<PointWithCov> pv_list;
             Eigen::Matrix3d r_wl = kf.x().rot * kf.x().rot_ext;
@@ -305,8 +355,9 @@ namespace lio
             shared_state.H += J.transpose() * r_info * J;
             shared_state.b += J.transpose() * r_info * data_group.residual_info[i].residual;
         }
+        data_group.effect_num = effect_num;
         if (effect_num < 1)
-            std::cout << "NO EFFECTIVE POINT";
+            std::cout << "NO EFFECTIVE POINT" << std::endl;
         // std::cout << "==================: " << effect_num << std::endl;
     }
 

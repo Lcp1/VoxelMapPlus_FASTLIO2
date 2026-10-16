@@ -42,6 +42,11 @@ struct Config
     double ds_size = 0.25;
     int sub_frame_num = 10;
     std::string odom_cloud_topic = "/lio_node/cloud_with_odom";
+    // 位姿近邻回环候选: 当前关键帧位置与历史关键帧距离小于该值(米)时作为候选, 再用几何ICP验证。
+    // STD描述子在港口这类重复场景召回率极低(边长相近的假匹配占绝大多数), 靠位姿近邻更可靠
+    double loop_search_radius = 50.0;
+    int loop_verify_num = 15;  // 每次最多验证的最近候选数(控制ICP耗时)
+    int loop_min_gap = 50; // 与历史关键帧的最小间隔(关键帧数, 1帧≈sub_frame_num个LIO帧)
 };
 
 struct DataGroup
@@ -89,6 +94,9 @@ public:
         nh.param<std::string>("odom_cloud_topic", node_config.odom_cloud_topic, "/lio_node/cloud_with_odom");
         nh.param<double>("ds_size", node_config.ds_size, 0.25);
         nh.param<int>("sub_frame_num", node_config.sub_frame_num, 10);
+        nh.param<double>("loop_search_radius", node_config.loop_search_radius, 50.0);
+        nh.param<int>("loop_verify_num", node_config.loop_verify_num, 15);
+        nh.param<int>("loop_min_gap", node_config.loop_min_gap, 50);
 
         nh.param<double>("voxel_size", std_config.voxel_size, 1.0);
         nh.param<int>("voxel_min_point", std_config.voxel_min_point, 10);
@@ -308,6 +316,63 @@ public:
                 result = std_manager->searchLoop(feature);
                 auto end = std::chrono::high_resolution_clock::now();
                 duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+            }
+            {
+                Eigen::Vector3d cp = data_group.origin_pose_vec.back().translation();
+                std::cout << "[kf] id=" << feature.id << " pos=(" << std::fixed << std::setprecision(1) << cp.transpose()
+                          << ") descs=" << feature.descs.size() << " valid=" << (result.valid ? 1 : 0)
+                          << " match_id=" << result.match_id << " score=" << std::setprecision(3) << result.match_score << std::endl;
+            }
+
+            // STD描述子在港口这类重复场景召回率极低(边长相近的假匹配占绝大多数, 几何一致性投票过不了):
+            // 描述子检索失败时, 改用"位姿近邻"产生候选——车回到走过的地方时位姿必定靠近, 再用几何ICP验证
+            if (!result.valid && data_group.origin_pose_vec.size() > static_cast<size_t>(node_config.sub_frame_num))
+            {
+                const Eigen::Affine3d cur_pose = data_group.origin_pose_vec.back();
+                // 先按距离收集候选(半径要覆盖LIO的累积漂移), 只对最近的若干个做ICP, 控制耗时
+                std::vector<std::pair<double, size_t>> cands;
+                for (size_t c = 0; c + node_config.loop_min_gap < feature.id && c < std_manager->cloud_vec.size(); c++)
+                {
+                    size_t pose_idx = c * node_config.sub_frame_num;
+                    if (pose_idx >= data_group.origin_pose_vec.size())
+                        break;
+                    double dis = (data_group.origin_pose_vec[pose_idx].translation() - cur_pose.translation()).norm();
+                    if (dis > node_config.loop_search_radius)
+                        continue;
+                    cands.emplace_back(dis, c);
+                }
+                std::sort(cands.begin(), cands.end());
+                if (cands.size() > static_cast<size_t>(node_config.loop_verify_num))
+                    cands.resize(node_config.loop_verify_num);
+
+                double best_score = -1.0;
+                int best_id = -1;
+                Eigen::Matrix3d best_rot = Eigen::Matrix3d::Identity();
+                Eigen::Vector3d best_trans = Eigen::Vector3d::Zero();
+                for (auto &cd : cands)
+                {
+                    const Eigen::Affine3d cand_pose = data_group.origin_pose_vec[cd.second * node_config.sub_frame_num];
+                    // 初值: 同一地点两次经过的位姿差(机体看到的点云相同, 世界系差即为漂移)
+                    Eigen::Matrix3d rot = cand_pose.linear() * cur_pose.linear().transpose();
+                    Eigen::Vector3d trans = cand_pose.translation() - rot * cur_pose.translation();
+                    double score = std_manager->verifyGeoPlaneICP(feature.cloud, std_manager->cloud_vec[cd.second], rot, trans);
+                    if (score > best_score)
+                    {
+                        best_score = score;
+                        best_id = static_cast<int>(cd.second);
+                        best_rot = rot;
+                        best_trans = trans;
+                    }
+                }
+                if (best_id >= 0 && best_score > std_config.icp_thresh)
+                {
+                    result.valid = true;
+                    result.match_id = best_id;
+                    result.match_score = best_score;
+                    result.rotation = best_rot;
+                    result.translation = best_trans;
+                    ROS_WARN("FIND LOOP BY POSE PROXIMITY! CURRENT_ID: %lu, LOOP_ID: %d, SCORE: %.4f", feature.id, best_id, best_score);
+                }
             }
 
             std_manager->insert(feature);

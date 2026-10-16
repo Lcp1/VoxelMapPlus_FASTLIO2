@@ -153,6 +153,8 @@ namespace kf
         L.block<3, 3>(6, 6) = rightJacobian(delta.segment<3>(6));
         L.block<2, 2>(21, 21) = x_.getNx() * predict_x.getMx(delta.segment<2>(21));
         P_ = L * H_.inverse() * L.transpose();
+        if (min_cov_.maxCoeff() > 0.0)
+            P_.diagonal() = P_.diagonal().cwiseMax(min_cov_);
     }
 
 } // namespace kf

@@ -60,7 +60,14 @@ set(SRC_LIST src/utils.cpp
 
 add_executable(lio_node src/lio_node.cpp ${SRC_LIST})
 
+# 只有位姿、没有IMU测量的数据集(如KITTI的/pose_imu): 由位姿合成IMU
+add_executable(pose_to_imu src/pose_to_imu_node.cpp)
+
 
 target_link_libraries(lio_node
+  ${catkin_LIBRARIES}
+)
+
+target_link_libraries(pose_to_imu
   ${catkin_LIBRARIES}
 )

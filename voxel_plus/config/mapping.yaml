@@ -1,19 +1,55 @@
-lidar_topic: /livox/lidar
-imu_topic: /livox/imu
+# 配置: KITTI 2011_09_30_0018 (Velodyne HDL-64E + OXTS 位姿)
+#
+# 这个 bag 的特殊之处:
+#  1) 没有任何 IMU 测量(角速度/加速度), 只有 /pose_imu(或 /transform_imu) 的 10Hz 位姿
+#     → 用 pose_to_imu 节点把位姿合成成 100Hz 的 sensor_msgs/Imu (见 mapping_kitti.launch)
+#  2) 点云没有逐点时间字段(只有 x/y/z/intensity), 但它是旋转式雷达、每帧正好一圈
+#     → 用点自身方位角推算扫描内时刻做去畸变 (8m/s 下不做去畸变会有 ±0.4m 拖影)
+#  3) 每帧 12.7 万点 → 需要抽稀/降采样
 
-map_frame: lidar
+lidar_type: pointcloud2
+lidar_topic: /lidar_preprocessor/meta_cloud
+imu_topic: /ins_driver/imu          # pose_to_imu 合成出来的
+velocity_topic: /wheel_odom  # 位姿导数得到的速度, 用于LIO初速度(消除起步收敛滞后)
+
+map_frame: lio_map
 body_frame: body
 
+point_time_from_azimuth: true      # 用方位角推逐点时间
+scan_period: 0.1                   # 一帧 0.1s
+azimuth_dir: -1                    # HDL-64E 顺时针扫描
+cloud_time_offset: 0.05            # 上项生效时不用它, 保留无妨
+
+# 体素平面可视化: 每5s发布一次 /lio_node/voxel_map (MarkerArray)
 publish_voxel_map: true
 publish_voxel_num: 2000
 
+range_min: 1.5
+range_max: 60.0
+filter_num: 2                      # 12.7万点抽稀一半
+scan_resolution: 0.25
 
-scan_resolution: 0.1
-voxel_size: 0.4
-map_capacity: 100000
+voxel_size: 1.
+map_capacity: 300000
 max_point_thresh: 100
-update_size_threshes: 20
+update_size_thresh: 20
+init_frames: 1                          # 起步就在动, 速度锁尽量短
+max_residual: 0.5
 merge_thresh_for_angle: 0.2
 merge_thresh_for_distance: 0.04
 
+min_pos_cov: 1e-4
+min_rot_cov: 1e-6
+min_vel_cov: 2.5e-3
+min_bias_cov: 1e-8
 
+# 外参: r_il 用单位阵(tf 里 imu->velodyne 的旋转只有 0.0085 rad),
+# p_il 取 tf 里 imu->velodyne 的平移 = 雷达在 imu 系下的位置
+r_il: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+p_il: [0.811, -0.307, 0.803]
+
+# 车起步就在动(6m/s), 而加速度是位姿二次微分来的、噪声大:
+gravity_align: false               # 车体基本水平, 直接用单位旋转, 避免被行驶加速度带偏重力对齐
+# 合成IMU实测: |a|=9.87±0.12, 水平分量噪声±0.9 m/s^2 → 按实测噪声给(方差=标准差^2)
+na: 0.8                            # 加速度计噪声方差 (0.9 m/s^2)^2
+ng: 0.001                          # 陀螺噪声方差 (0.03 rad/s)^2
