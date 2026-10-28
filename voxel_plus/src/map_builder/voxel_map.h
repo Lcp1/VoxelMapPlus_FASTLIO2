@@ -19,7 +19,7 @@ namespace lio
     /**
      * @brief 体素的整数索引, 同时作为哈希表的 key
      *
-     * 世界坐标点 p 对应的体素索引为 floor(p / voxel_size), 见 VoxelMap::index()
+     * 世界坐标点 p 对应的体素索引为 floor(p / voxel_size_), 见 VoxelMap::index()
      */
     class VoxelKey
     {
@@ -96,37 +96,37 @@ namespace lio
         // 由当前累积的点云拟合平面, 并把点的不确定度传播成 6x6 平面协方差
         void updatePlane();
 
-        // 只把点累加进平面统计量(在线均值/二阶矩/点数), 不入 temp_points
+        // 只把点累加进平面统计量(在线均值/二阶矩/点数), 不入 temp_points_
         void addToPlane(const PointWithCov &pv);
 
-        // 累加统计量 + 存入 temp_points, 不做任何阈值判断(供 build() 批量建图)
+        // 累加统计量 + 存入 temp_points_, 不做任何阈值判断(供 build() 批量建图)
         void addPoint(const PointWithCov &pv);
 
         // 在线增量插入(供 update() 使用), 内部维护整个体素的状态机
         void pushPoint(const PointWithCov &pv);
 
-        // 与 6 邻域中已冻结的共面体素合并, 统一平面参数并打上相同的 group_id
+        // 与 6 邻域中已冻结的共面体素合并, 统一平面参数并打上相同的 group_id_
         void merge();
 
     public:
-        static uint64_t count;      // 全局自增 ID 计数器, 用于分配 group_id
-        int max_point_thresh;       // temp_points 的点数上限, 达到后冻结本体素
-        int update_point_thresh;    // 每新增多少个点重算一次平面
-        double plane_thresh;        // 平面判定阈值: 最小特征值大于它则认为不是平面
-        bool is_init;               // 是否已经初始化过(至少完整跑通一次 updatePlane)
-        bool is_plane;              // 当前是否被判定为平面
-        bool update_enable;         // 是否还在接收新点, false 表示已冻结
-        int newly_add_point;        // 距上次重算平面以来新增的点数
-        bool merged;                // 本帧是否发生过合并
-        uint64_t group_id;          // 平面合并后的分组 ID, 用于避免重复合并
-        std::vector<PointWithCov> temp_points; // 保留的原始点(算协方差时需要)
-        VoxelKey position;          // 本体素的整数索引
-        VoxelMap *map;              // 所属地图, merge() 时用于查邻居
-        std::shared_ptr<Plane> plane; // 拟合出的平面
-        Eigen::Vector3d center;     // 平面中心(等价于 plane->mean)
-        std::list<VoxelKey>::iterator cache_it; // 指向 VoxelMap::cache 中自己的节点, 用于 O(1) LRU 移动
-        static double merge_thresh_for_angle;    // 合并的夹角阈值(1 - cos)
-        static double merge_thresh_for_distance; // 合并的平面间距阈值
+        static uint64_t count_;      // 全局自增 ID 计数器, 用于分配 group_id_
+        int max_point_thresh_;       // temp_points_ 的点数上限, 达到后冻结本体素
+        int update_point_thresh_;    // 每新增多少个点重算一次平面
+        double plane_thresh_;        // 平面判定阈值: 最小特征值大于它则认为不是平面
+        bool is_init_;               // 是否已经初始化过(至少完整跑通一次 updatePlane)
+        bool is_plane_;              // 当前是否被判定为平面
+        bool update_enable_;         // 是否还在接收新点, false 表示已冻结
+        int newly_add_point_;        // 距上次重算平面以来新增的点数
+        bool merged_;                // 本帧是否发生过合并
+        uint64_t group_id_;          // 平面合并后的分组 ID, 用于避免重复合并
+        std::vector<PointWithCov> temp_points_; // 保留的原始点(算协方差时需要)
+        VoxelKey position_;          // 本体素的整数索引
+        VoxelMap *map_;              // 所属地图, merge() 时用于查邻居
+        std::shared_ptr<Plane> plane_; // 拟合出的平面
+        Eigen::Vector3d center_;     // 平面中心(等价于 plane_->mean)
+        std::list<VoxelKey>::iterator cache_it_; // 指向 VoxelMap::cache_ 中自己的节点, 用于 O(1) LRU 移动
+        static double merge_thresh_for_angle_;    // 合并的夹角阈值(1 - cos)
+        static double merge_thresh_for_distance_; // 合并的平面间距阈值
     };
 
     // 体素哈希表: 由体素索引映射到体素对象
@@ -138,9 +138,9 @@ namespace lio
     class VoxelMap
     {
     public:
-        VoxelMap(int _max_point_thresh, int _update_point_thresh, double _plane_thresh, double _voxel_size, int capacity = 2000000);
+        VoxelMap(int _max_point_thresh, int _update_point_thresh, double _plane_thresh, double _voxel_size, int _capacity = 2000000);
 
-        // 世界坐标 -> 体素索引: floor(point / voxel_size)
+        // 世界坐标 -> 体素索引: floor(point / voxel_size_)
         VoxelKey index(const Eigen::Vector3d &point);
 
         // 初始化建图(首帧): 只累积点, 最后对全表统一拟合一次平面
@@ -153,13 +153,13 @@ namespace lio
         bool buildResidual(ResidualData &data, std::shared_ptr<VoxelGrid> voxel_grid);
 
     public:
-        int max_point_thresh;      // 下发给每个 VoxelGrid 的点数上限
-        int update_point_thresh;   // 下发给每个 VoxelGrid 的重算间隔
-        double plane_thresh;       // 下发给每个 VoxelGrid 的平面判定阈值
-        double voxel_size;         // 体素边长
-        Featmap featmap;           // 体素哈希表
-        std::list<VoxelKey> cache; // LRU 链表: 头部最近使用, 尾部最先淘汰
-        int capacity;              // 体素数量上限, 超出后按 LRU 淘汰
+        int max_point_thresh_;      // 下发给每个 VoxelGrid 的点数上限
+        int update_point_thresh_;   // 下发给每个 VoxelGrid 的重算间隔
+        double plane_thresh_;       // 下发给每个 VoxelGrid 的平面判定阈值
+        double voxel_size_;         // 体素边长
+        Featmap featmap_;           // 体素哈希表
+        std::list<VoxelKey> cache_; // LRU 链表: 头部最近使用, 尾部最先淘汰
+        int capacity_;              // 体素数量上限, 超出后按 LRU 淘汰
     };
 
 } // namespace lio

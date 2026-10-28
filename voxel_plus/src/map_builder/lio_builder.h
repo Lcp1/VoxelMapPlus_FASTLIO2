@@ -67,9 +67,9 @@ namespace lio
      *   process()
      *     -> undistortCloud()  用 IMU 预积分把点云去畸变(同时完成 IESKF 的预测)
      *     -> calcBodyCov() 等  构造 PointWithCov 列表(世界系点坐标 + 点协方差)
-     *     -> 首帧: map->build()              批量建立体素平面地图
-     *        后续: kf.update() + map->update()  IESKF 迭代更新 + 地图增量插入
-     *   kf.update() 每次迭代都会回调 sharedUpdateFunc(), 由它调用 VoxelMap::buildResidual()
+     *     -> 首帧: map_->build()              批量建立体素平面地图
+     *        后续: kf_.update() + map_->update()  IESKF 迭代更新 + 地图增量插入
+     *   kf_.update() 每次迭代都会回调 sharedUpdateFunc(), 由它调用 VoxelMap::buildResidual()
      *   组装点-面残差的 H/b 交给 IESKF 求解
      */
     class LIOBuilder
@@ -87,7 +87,7 @@ namespace lio
 
         /**
          * IMU 初始化(由 process() 在 IMU_INIT 状态下反复调用)
-         * 攒够 config.imu_init_num 帧后: 求平均加速度/角速度, 设置外参与零偏初值,
+         * 攒够 config_.imu_init_num 帧后: 求平均加速度/角速度, 设置外参与零偏初值,
          * 对齐初始姿态与重力方向, 初始化协方差 P; 返回 true 表示初始化完成
          */
         bool initializeImu(std::vector<IMUData> &imus);
@@ -100,7 +100,7 @@ namespace lio
 
         /**
          * 每帧主入口(由 lio_node.cpp 的定时器回调 mainCB 调用)
-         * 按 status 走状态机: IMU_INIT / MAP_INIT / LIO_MAPPING 三个分支, 见 .cpp 中的实现
+         * 按 status_ 走状态机: IMU_INIT / MAP_INIT / LIO_MAPPING 三个分支, 见 .cpp 中的实现
          */
         void process(SyncPackage &package);
 
@@ -118,13 +118,13 @@ namespace lio
         pcl::PointCloud<pcl::PointXYZINormal>::Ptr lidarToBody(const pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud);
 
     public:
-        kf::IESKF kf;                     // 迭代误差状态卡尔曼滤波器(状态 23 维, 定义见 ieskf.h)
-        LIOConfig config;                 // 参数副本, 由 loadConfig() 整体赋值
-        LIODataGroup data_group;          // 跨帧解算上下文
-        LIOStatus status = LIOStatus::IMU_INIT; // 状态机当前状态, lio_node 也据此判断本帧是否发布结果
-        pcl::PointCloud<pcl::PointXYZINormal>::Ptr lidar_cloud; // 当前帧降采样后的点云, sharedUpdateFunc() 使用
-        pcl::VoxelGrid<pcl::PointXYZINormal> scan_filter; // 当前帧体素降采样器(scan_resolution > 0 时生效)
-        std::shared_ptr<VoxelMap> map;    // 体素平面地图(lio_node 的体素可视化也直接读它)
+        kf::IESKF kf_;                     // 迭代误差状态卡尔曼滤波器(状态 23 维, 定义见 ieskf.h)
+        LIOConfig config_;                 // 参数副本, 由 loadConfig() 整体赋值
+        LIODataGroup data_group_;          // 跨帧解算上下文
+        LIOStatus status_ = LIOStatus::IMU_INIT; // 状态机当前状态, lio_node 也据此判断本帧是否发布结果
+        pcl::PointCloud<pcl::PointXYZINormal>::Ptr lidar_cloud_; // 当前帧降采样后的点云, sharedUpdateFunc() 使用
+        pcl::VoxelGrid<pcl::PointXYZINormal> scan_filter_; // 当前帧体素降采样器(scan_resolution > 0 时生效)
+        std::shared_ptr<VoxelMap> map_;    // 体素平面地图(lio_node 的体素可视化也直接读它)
     };
 
 } // namespace lio

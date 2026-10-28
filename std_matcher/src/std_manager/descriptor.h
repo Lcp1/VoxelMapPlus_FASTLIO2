@@ -43,8 +43,8 @@ namespace std_desc
     /**
      * @brief 体素的整数索引, 作为哈希表的 key, 在本工程中复用为三种用途
      *
-     *   1) 空间体素索引: index(x, y, z, voxel_size)          -- 当前帧体素表 temp_voxels
-     *   2) 边长哈希桶键:  index(s1, s2, s3, side_resolution)  -- 描述子数据库 data_base 的插入/检索
+     *   1) 空间体素索引: index(x, y, z, voxel_size)          -- 当前帧体素表 temp_voxels_
+     *   2) 边长哈希桶键:  index(s1, s2, s3, side_resolution)  -- 描述子数据库 data_base_ 的插入/检索
      *   3) 边长去重键:    index(s1, s2, s3, 0.001)            -- buildDescriptor 内部去重
      */
     class VoxelKey
@@ -187,7 +187,7 @@ namespace std_desc
     struct STDDescriptor
     {
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-        Eigen::Vector3d side_length; // 三边长(米), 升序 s1 <= s2 <= s3; 也是 data_base 哈希桶的量化依据
+        Eigen::Vector3d side_length; // 三边长(米), 升序 s1 <= s2 <= s3; 也是 data_base_ 哈希桶的量化依据
         Eigen::Vector3d angle;       // 顶点法向夹角特征: (5*|n_a·n_b|, 5*|n_b·n_c|, 5*|n_c·n_a|), 见 buildDescriptor
         Eigen::Vector3d center;      // 三角形重心 (A + B + C) / 3, triangleSolver 中作为平移对齐基准
         Eigen::Vector3d vertex_a;    // 顶点 A(A 的对边 s1 最短)
@@ -195,7 +195,7 @@ namespace std_desc
         Eigen::Vector3d vertex_c;    // 顶点 C(C 的对边 s3 最长)
         Eigen::Vector3d attached;    // 三个顶点的 intensity 三元组(角点强度), 候选检索时用于顶点属性比较
         Eigen::Matrix3d norms;       // 三列分别为 A/B/C 三个顶点的单位法向量(取自角点来源的平面)
-        uint64_t id;                 // 描述子所属帧号, 由 insert() 赋值为 frame_count
+        uint64_t id;                 // 描述子所属帧号, 由 insert() 赋值为 frame_count_
     };
     /**
      * @brief 一帧的全部 STD 特征: 三角形描述子集合 + 该帧的平面点云
@@ -206,7 +206,7 @@ namespace std_desc
     {
         // NOTE: extract() 未对 stamp 赋值, 当前工程中也没有地方读取它
         double stamp; // 时间戳(预留字段)
-        uint64_t id;  // 帧号, extract() 中置为 frame_count(不自增), insert() 中再次确认
+        uint64_t id;  // 帧号, extract() 中置为 frame_count_(不自增), insert() 中再次确认
         // NOTE: extract() 未对 valid 赋值, 当前工程中也没有地方读取它
         bool valid; // 特征是否有效(预留字段)
         std::vector<STDDescriptor> descs; // 该帧所有三角形描述子
@@ -217,7 +217,7 @@ namespace std_desc
      */
     struct STDMatch
     {
-        uint64_t match_id; // 候选历史帧号(即 data_base 中描述子的 id)
+        uint64_t match_id; // 候选历史帧号(即 data_base_ 中描述子的 id)
         std::vector<std::pair<STDDescriptor, STDDescriptor>> match_pairs; // 描述子对: first 当前帧, second 历史帧
     };
     /**
@@ -225,7 +225,7 @@ namespace std_desc
      */
     struct LoopResult
     {
-        bool valid = false;           // 是否判定为有效回环(得分 > config.icp_thresh)
+        bool valid = false;           // 是否判定为有效回环(得分 > config_.icp_thresh)
         uint64_t match_id;            // 匹配上的历史帧号(searchLoop 中初始化为 -1, 即 uint64 最大值, 作“无匹配”标记)
         double match_score;           // 几何验证得分(平面点匹配比例, 0 ~ 1)
         Eigen::Matrix3d rotation;     // 当前帧 -> 历史帧 的旋转(由最佳三角形对解出)
@@ -239,28 +239,28 @@ namespace std_desc
      * 典型调用顺序(pgo_node 对每个关键帧):
      *   extract() -> searchLoop() -> insert()
      * searchLoop 必须在 insert 之前调用, 保证当前帧不会检索到自身;
-     * 时间上过近的历史帧由 config.skip_near_num 过滤
+     * 时间上过近的历史帧由 config_.skip_near_num 过滤
      */
     class STDManager
     {
     public:
         /**
          * @brief 构造函数: 仅保存参数副本
-         * @param _config 提取/匹配参数(按值拷贝到成员 config)
+         * @param _config 提取/匹配参数(按值拷贝到成员 config_)
          */
-        STDManager(Config &_config) : config(_config) {}
+        STDManager(Config &_config) : config_(_config) {}
 
         /**
          * @brief 单帧特征提取主入口: 体素化 -> 平面连接 -> 角点提取 -> 三角形描述子 -> 平面点云
          * @param cloud 当前关键帧点云(雷达系)
-         * @return STDFeature: descs 为三角形描述子, cloud 为平面点云, id 置为 frame_count(不自增)
+         * @return STDFeature: descs 为三角形描述子, cloud 为平面点云, id 置为 frame_count_(不自增)
          * @note 内部调用 buildVoxels / buildConnections / extractCorners / buildDescriptor / currentPlaneCloud
          */
         STDFeature extract(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud);
 
         /**
          * @brief 把点云按 voxel_size 划分体素, 累加 sum/ppt 统计量并逐体素作特征分解判定平面
-         * @param cloud 输入点云; 结果写入成员 temp_voxels
+         * @param cloud 输入点云; 结果写入成员 temp_voxels_
          */
         void buildVoxels(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud);
 
@@ -301,13 +301,13 @@ namespace std_desc
 
         /**
          * @brief 汇总当前帧所有平面体素为一个平面点云(位置 = 质心, 法向 = 平面法向)
-         * @return 平面点云, 供几何验证使用并随 STDFeature 保存到 cloud_vec
+         * @return 平面点云, 供几何验证使用并随 STDFeature 保存到 cloud_vec_
          */
         pcl::PointCloud<pcl::PointXYZINormal>::Ptr currentPlaneCloud();
 
         /**
-         * @brief 把一帧特征写入历史数据库: 平面点云入 cloud_vec, 描述子按边长桶入 data_base, 帧号自增
-         * @param feature 待入库特征(其 id 与内部描述子的 id 会被改写为当前 frame_count)
+         * @brief 把一帧特征写入历史数据库: 平面点云入 cloud_vec_, 描述子按边长桶入 data_base_, 帧号自增
+         * @param feature 待入库特征(其 id 与内部描述子的 id 会被改写为当前 frame_count_)
          */
         void insert(STDFeature &feature);
 
@@ -320,9 +320,9 @@ namespace std_desc
         void triangleSolver(std::pair<STDDescriptor, STDDescriptor> &pair, Eigen::Matrix3d &rot, Eigen::Vector3d &trans);
 
         /**
-         * @brief 在 data_base 中检索当前帧每个描述子的候选匹配(边长桶查找 + 初筛 + 按帧投票排序)
+         * @brief 在 data_base_ 中检索当前帧每个描述子的候选匹配(边长桶查找 + 初筛 + 按帧投票排序)
          * @param feature    当前帧特征(使用其 descs 与 id)
-         * @param match_list 输出候选匹配列表, 按票数从高到低, 最多 config.candidate_num 个
+         * @param match_list 输出候选匹配列表, 按票数从高到低, 最多 config_.candidate_num 个
          */
         void selectCanidates(STDFeature &feature, std::vector<STDMatch> &match_list);
 
@@ -366,16 +366,16 @@ namespace std_desc
         /**
          * @brief 回环检索入口: 选候选 -> 逐个验证打分 -> 保留最高分
          * @param feature 当前帧特征(需在 insert 之前调用)
-         * @return LoopResult, 其中 match_score > config.icp_thresh 时 valid 置 true
+         * @return LoopResult, 其中 match_score > config_.icp_thresh 时 valid 置 true
          */
         LoopResult searchLoop(STDFeature &feature);
 
     public:
-        Config config;                // 参数副本(构造时从入参拷贝)
-        static uint64_t frame_count;  // 全局帧计数器: insert() 每收录一帧自增一次, 同时用作描述子 id / cloud_vec 下标
-        std::unordered_map<VoxelKey, VoxelNode, VoxelKey::Hasher> temp_voxels; // 当前帧的体素表, extract() 开始时清空重建
+        Config config_;                // 参数副本(构造时从入参拷贝)
+        static uint64_t frame_count_;  // 全局帧计数器: insert() 每收录一帧自增一次, 同时用作描述子 id / cloud_vec_ 下标
+        std::unordered_map<VoxelKey, VoxelNode, VoxelKey::Hasher> temp_voxels_; // 当前帧的体素表, extract() 开始时清空重建
         // 历史描述子数据库: 边长桶(VoxelKey) -> 该桶内所有描述子; 随帧数持续增长, 不做清理
-        std::unordered_map<VoxelKey, std::vector<STDDescriptor>, VoxelKey::Hasher> data_base;
-        std::vector<pcl::PointCloud<pcl::PointXYZINormal>::Ptr> cloud_vec; // 每帧平面点云, 下标 == 帧号(由 insert() 顺序 push 保证)
+        std::unordered_map<VoxelKey, std::vector<STDDescriptor>, VoxelKey::Hasher> data_base_;
+        std::vector<pcl::PointCloud<pcl::PointXYZINormal>::Ptr> cloud_vec_; // 每帧平面点云, 下标 == 帧号(由 insert() 顺序 push 保证)
     };
 }

@@ -211,9 +211,9 @@ void calcVectQuation(const Eigen::Vector3d &norm_vec, geometry_msgs::Quaternion 
  * 体素平面地图转成 rviz 可视化用的 MarkerArray
  *
  * 步骤:
- *   1. 取本次要检查的体素数量 size = min(cache 长度, max_capacity), 并预留 markers 容量
- *   2. 遍历 LRU 链表 map->cache(头部是最久未被淘汰的一端), 只处理"已冻结的平面"体素:
- *      is_plane 为真且 update_enable 为假(即已经攒够点、平面参数不再变化)
+ *   1. 取本次要检查的体素数量 size = min(cache_ 长度, max_capacity), 并预留 markers 容量
+ *   2. 遍历 LRU 链表 map->cache_(头部是最久未被淘汰的一端), 只处理"已冻结的平面"体素:
+ *      is_plane_ 为真且 update_enable_ 为假(即已经攒够点、平面参数不再变化)
  *   3. 用平面法向量协方差(左上 3x3 block)的迹衡量该平面是否可靠, 截断到 0.25 并归一化后
  *      再做 0.2 次幂拉伸, 最后交给 mapJet 映射成颜色: 迹越小(法向越确定)颜色越偏蓝
  *   4. 每个平面发一个 marker: 位置取体素平面中心, 姿态由平面法向得到(局部 Z 轴对齐法向),
@@ -226,21 +226,21 @@ void calcVectQuation(const Eigen::Vector3d &norm_vec, geometry_msgs::Quaternion 
 visualization_msgs::MarkerArray voxel2MarkerArray(std::shared_ptr<lio::VoxelMap> map, const std::string &frame_id, const double &timestamp, int max_capacity, double voxel_size)
 {
     visualization_msgs::MarkerArray voxel_plane;
-    int size = std::min(static_cast<int>(map->cache.size()), max_capacity);  // 本次最多检查的体素数
+    int size = std::min(static_cast<int>(map->cache_.size()), max_capacity);  // 本次最多检查的体素数
 
     voxel_plane.markers.reserve(size);  // 预留, 最多也就发布 size 个 marker
     int count = 0;                      // 已发布的 marker 数, 同时用作 marker.id
-    for (auto &k : map->cache)
+    for (auto &k : map->cache_)
     {
         if (count >= size)
             break;  // 已经发够数量
-        std::shared_ptr<lio::VoxelGrid> grid = map->featmap[k];  // NOTE: 用的是 operator[], 若该 key 不存在会插入一个空的 shared_ptr, 随后解引用会崩; 这里假定 cache 与 featmap 始终同步
-        if (!grid->is_plane || grid->update_enable)
+        std::shared_ptr<lio::VoxelGrid> grid = map->featmap_[k];  // NOTE: 用的是 operator[], 若该 key 不存在会插入一个空的 shared_ptr, 随后解引用会崩; 这里假定 cache_ 与 featmap_ 始终同步
+        if (!grid->is_plane_ || grid->update_enable_)
             continue;   // 跳过非平面体素, 以及还在更新的体素(只可视化已冻结的平面)
 
-        Eigen::Vector3d grid_center = grid->center;  // 平面中心(即拟合出的点云质心)
+        Eigen::Vector3d grid_center = grid->center_;  // 平面中心(即拟合出的点云质心)
 
-        double trace = grid->plane->cov.block<3, 3>(0, 0).trace();   // 法向量协方差的迹, 越小说明法向越可信
+        double trace = grid->plane_->cov.block<3, 3>(0, 0).trace();   // 法向量协方差的迹, 越小说明法向越可信
         if (trace >= 0.25)
             trace = 0.25;                   // 截断到 0.25, 避免个别劣质平面污染色带
         trace = trace * (1.0 / 0.25);       // 归一化到 [0, 1]
@@ -255,7 +255,7 @@ visualization_msgs::MarkerArray voxel2MarkerArray(std::shared_ptr<lio::VoxelMap>
         plane.header.stamp = ros::Time().fromSec(timestamp);
         plane.ns = "plane";                 // marker 命名空间
         plane.id = count++;                 // 同一命名空间内 id 唯一
-        if (!grid->merged)
+        if (!grid->merged_)
             plane.type = visualization_msgs::Marker::CYLINDER;   // 未参与合并: 画圆片
         else
             plane.type = visualization_msgs::Marker::CUBE;       // 参与过合并: 画方块
@@ -264,7 +264,7 @@ visualization_msgs::MarkerArray voxel2MarkerArray(std::shared_ptr<lio::VoxelMap>
         plane.pose.position.y = grid_center[1];
         plane.pose.position.z = grid_center[2];
         geometry_msgs::Quaternion q;
-        calcVectQuation(grid->plane->norm, q);   // 姿态: 使 marker 局部 Z 轴对齐平面法向
+        calcVectQuation(grid->plane_->norm, q);   // 姿态: 使 marker 局部 Z 轴对齐平面法向
         plane.pose.orientation = q;
         plane.scale.x = voxel_size;         // 与体素边长同量级
         plane.scale.y = voxel_size;

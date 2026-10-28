@@ -164,7 +164,7 @@ namespace kf
      */
     IESKF::IESKF() = default;
 
-    // 误差状态各块的下标常量(与 State 成员顺序一一对应), 定义在类外, 供外部按块读取 kf.P()
+    // 误差状态各块的下标常量(与 State 成员顺序一一对应), 定义在类外, 供外部按块读取 kf_.P()
     int IESKF::P_ID = 0, IESKF::R_ID = 3, IESKF::ER_ID = 6, IESKF::EP_ID = 9, IESKF::V_ID = 12, IESKF::BG_ID = 15, IESKF::BA_ID = 18, IESKF::G_ID = 21;
 
     /**
@@ -227,7 +227,7 @@ namespace kf
      * 迭代结束后:
      *   L 与迭代内的 J 同构, 用收敛后的 delta 求值;
      *   H_ 是收敛点处的后验信息矩阵, 其逆即该参数化下的后验协方差, 再用 L 变换回
-     *   与 predict() 递推、与点协方差传播(见 LIOBuilder 里读 kf.P() 分块)一致的参数化
+     *   与 predict() 递推、与点协方差传播(见 LIOBuilder 里读 kf_.P() 分块)一致的参数化
      */
     void IESKF::update()
     {

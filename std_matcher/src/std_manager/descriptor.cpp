@@ -99,8 +99,8 @@ namespace std_desc
         return keys;
     }
 
-    // 全局帧计数器: insert() 每收录一帧自增一次; 同时作为描述子 id 与 cloud_vec 的下标(见 insert 的说明)
-    uint64_t STDManager::frame_count = 0;
+    // 全局帧计数器: insert() 每收录一帧自增一次; 同时作为描述子 id 与 cloud_vec_ 的下标(见 insert 的说明)
+    uint64_t STDManager::frame_count_ = 0;
 
     /**
      * @brief 把当前帧点云划分到 voxel_size 体素, 累加一阶/二阶统计量, 并逐体素作特征分解判定平面
@@ -118,32 +118,32 @@ namespace std_desc
      *      否则 is_plane = false
      *
      * @param cloud 当前帧点云
-     * @note 结果写入成员 temp_voxels, 供 buildConnections / extractCorners 使用
+     * @note 结果写入成员 temp_voxels_, 供 buildConnections / extractCorners 使用
      */
     void STDManager::buildVoxels(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud)
     {
         for (auto &p : cloud->points)
         {
-            VoxelKey k = VoxelKey::index(p.x, p.y, p.z, config.voxel_size); // 点所属体素
-            if (temp_voxels.find(k) == temp_voxels.end()) // 新体素: 初始化各项状态
+            VoxelKey k = VoxelKey::index(p.x, p.y, p.z, config_.voxel_size); // 点所属体素
+            if (temp_voxels_.find(k) == temp_voxels_.end()) // 新体素: 初始化各项状态
             {
-                temp_voxels[k].cloud.reset(new pcl::PointCloud<pcl::PointXYZI>);
-                temp_voxels[k].is_plane = false;
-                temp_voxels[k].is_valid = false;
-                temp_voxels[k].lamdas.setZero();
-                temp_voxels[k].norms.setZero();
-                temp_voxels[k].sum.setZero();
-                temp_voxels[k].ppt.setZero();
+                temp_voxels_[k].cloud.reset(new pcl::PointCloud<pcl::PointXYZI>);
+                temp_voxels_[k].is_plane = false;
+                temp_voxels_[k].is_valid = false;
+                temp_voxels_[k].lamdas.setZero();
+                temp_voxels_[k].norms.setZero();
+                temp_voxels_[k].sum.setZero();
+                temp_voxels_[k].ppt.setZero();
             }
-            temp_voxels[k].cloud->push_back(p); // 保留原始点
+            temp_voxels_[k].cloud->push_back(p); // 保留原始点
             Eigen::Vector3d point_vec(p.x, p.y, p.z);
-            temp_voxels[k].sum += point_vec; // 一阶矩: Σp
-            temp_voxels[k].ppt += point_vec * point_vec.transpose(); // 二阶矩: Σ(p * p^T)
+            temp_voxels_[k].sum += point_vec; // 一阶矩: Σp
+            temp_voxels_[k].ppt += point_vec * point_vec.transpose(); // 二阶矩: Σ(p * p^T)
         }
 
-        for (auto it = temp_voxels.begin(); it != temp_voxels.end(); it++)
+        for (auto it = temp_voxels_.begin(); it != temp_voxels_.end(); it++)
         {
-            if (it->second.cloud->size() <= config.voxel_min_point) // 点数不足: 体素无效, 不参与平面判定
+            if (it->second.cloud->size() <= config_.voxel_min_point) // 点数不足: 体素无效, 不参与平面判定
             {
                 it->second.is_valid = false;
                 continue;
@@ -159,7 +159,7 @@ namespace std_desc
             lamdas.maxCoeff(&evalsMax); // 最大特征值下标(点云展布最大的方向)
             int evalsMid = 3 - evalsMin - evalsMax; // 剩下的一维就是中间特征值(0 + 1 + 2 = 3)
             it->second.mean = mean;
-            if (lamdas(evalsMin) < config.voxel_plane_thresh) // 最小特征值足够小 => 点云近似分布在一个平面上
+            if (lamdas(evalsMin) < config_.voxel_plane_thresh) // 最小特征值足够小 => 点云近似分布在一个平面上
             {
                 it->second.is_plane = true;
                 it->second.lamdas.x() = lamdas(evalsMin); // 重排: x = 最小特征值
@@ -193,7 +193,7 @@ namespace std_desc
      */
     void STDManager::buildConnections()
     {
-        for (auto it = temp_voxels.begin(); it != temp_voxels.end(); it++)
+        for (auto it = temp_voxels_.begin(); it != temp_voxels_.end(); it++)
         {
             // 如果不是平面，则跳过
             if (!it->second.is_plane)
@@ -215,8 +215,8 @@ namespace std_desc
                     nk.y = nk.y - 1; // -y
                 else if (i == 5)
                     nk.z = nk.z - 1; // -z
-                auto near = temp_voxels.find(nk);
-                if (near == temp_voxels.end())
+                auto near = temp_voxels_.find(nk);
+                if (near == temp_voxels_.end())
                 {
                     c_node.connect_check[i] = true; // 邻域体素不存在(边界): 已检查且不连接
                     c_node.connect[i] = false;
@@ -237,7 +237,7 @@ namespace std_desc
 
                         Eigen::Vector3d normal_dif = c_node.norm - n_node.norm; // 法向差: 同向时范数接近 0
                         Eigen::Vector3d normal_add = c_node.norm + n_node.norm; // 法向和: 反向时范数接近 0
-                        if (normal_add.norm() < config.norm_merge_thresh || normal_dif.norm() < config.norm_merge_thresh)
+                        if (normal_add.norm() < config_.norm_merge_thresh || normal_dif.norm() < config_.norm_merge_thresh)
                         {
                             c_node.connect[i] = true; // 双向共面连接
                             n_node.connect[j] = true;
@@ -306,7 +306,7 @@ namespace std_desc
         {
             Eigen::Vector3d p2c = point - mean; // 相对质心的向量
             double proj_x = p2c.dot(y_axis), proj_y = p2c.dot(x_axis), proj_z = p2c.dot(norm); // 2D 坐标 + 到平面的有符号距离
-            if (std::abs(proj_z) < config.proj_min_dis || std::abs(proj_z) > config.proj_max_dis)
+            if (std::abs(proj_z) < config_.proj_min_dis || std::abs(proj_z) > config_.proj_max_dis)
                 continue; // 点到平面距离落在保留区间之外: 丢弃
             point_list_2d.push_back(Eigen::Vector2d(proj_x, proj_y));
         }
@@ -326,11 +326,11 @@ namespace std_desc
                 max_y = pi[1];
         }
 
-        double segmen_len = config.nms_2d_range * config.proj_2d_resolution; // 滑动窗口的物理边长 = 窗宽栅格数 * 栅格分辨率
+        double segmen_len = config_.nms_2d_range * config_.proj_2d_resolution; // 滑动窗口的物理边长 = 窗宽栅格数 * 栅格分辨率
         int x_segment_num = (max_x - min_x) / segmen_len + 1; // 窗口个数(除法为 double, 隐式截断成 int)
         int y_segment_num = (max_y - min_y) / segmen_len + 1;
-        int x_axis_len = (int)((max_x - min_x) / config.proj_2d_resolution + config.nms_2d_range); // 栅格数组长度(含窗口余量)
-        int y_axis_len = (int)((max_y - min_y) / config.proj_2d_resolution + config.nms_2d_range);
+        int x_axis_len = (int)((max_x - min_x) / config_.proj_2d_resolution + config_.nms_2d_range); // 栅格数组长度(含窗口余量)
+        int y_axis_len = (int)((max_y - min_y) / config_.proj_2d_resolution + config_.nms_2d_range);
 
         // NOTE: 以下三个变长数组(VLA)是 GCC 扩展而非标准 C++, 长度由运行时数据决定且分配在栈上
         double img_count_array[x_axis_len][y_axis_len]; // 每格点数
@@ -350,8 +350,8 @@ namespace std_desc
         for (size_t i = 0; i < point_list_2d.size(); i++)
         {
 
-            int x_index = (int)((point_list_2d[i][0] - min_x) / config.proj_2d_resolution); // 落入的栅格(以 min 为原点, 截断取整)
-            int y_index = (int)((point_list_2d[i][1] - min_y) / config.proj_2d_resolution);
+            int x_index = (int)((point_list_2d[i][0] - min_x) / config_.proj_2d_resolution); // 落入的栅格(以 min 为原点, 截断取整)
+            int y_index = (int)((point_list_2d[i][1] - min_y) / config_.proj_2d_resolution);
             mean_x_array[x_index][y_index] += point_list_2d[i][0]; // 累加坐标和, 输出角点时再取均值
             mean_y_array[x_index][y_index] += point_list_2d[i][1];
             img_count_array[x_index][y_index]++; // 该格点数加一
@@ -368,9 +368,9 @@ namespace std_desc
                 double max_gradient = 0;
                 int max_gradient_x_index = -10;
                 int max_gradient_y_index = -10;
-                for (int x_index = x_segment_index * config.nms_2d_range; x_index < (x_segment_index + 1) * config.nms_2d_range; x_index++)
+                for (int x_index = x_segment_index * config_.nms_2d_range; x_index < (x_segment_index + 1) * config_.nms_2d_range; x_index++)
                 {
-                    for (int y_index = y_segment_index * config.nms_2d_range; y_index < (y_segment_index + 1) * config.nms_2d_range; y_index++)
+                    for (int y_index = y_segment_index * config_.nms_2d_range; y_index < (y_segment_index + 1) * config_.nms_2d_range; y_index++)
                     {
                         if (img_count_array[x_index][y_index] > max_gradient)
                         {
@@ -380,7 +380,7 @@ namespace std_desc
                         }
                     }
                 }
-                if (max_gradient >= config.corner_thresh) // 峰值点数达到角点阈值: 记录该窗口的候选
+                if (max_gradient >= config_.corner_thresh) // 峰值点数达到角点阈值: 记录该窗口的候选
                 {
                     max_gradient_vec.push_back(max_gradient);
                     max_gradient_x_index_vec.push_back(max_gradient_x_index);
@@ -433,7 +433,7 @@ namespace std_desc
     {
         // 以下为被注释掉的旧方案: 先把体素 key 排序再按序遍历, 用于保证遍历顺序与哈希表实现无关
         // std::vector<VoxelKey> keys;
-        // for (auto iter = temp_voxels.begin(); iter != temp_voxels.end(); iter++)
+        // for (auto iter = temp_voxels_.begin(); iter != temp_voxels_.end(); iter++)
         // {
         //     keys.push_back(iter->first);
         // }
@@ -446,10 +446,10 @@ namespace std_desc
 
         pcl::PointCloud<pcl::PointXYZINormal>::Ptr prepare_corner_points(new pcl::PointCloud<pcl::PointXYZINormal>); // 角点总集合
 
-        for (auto iter = temp_voxels.begin(); iter != temp_voxels.end(); iter++)
+        for (auto iter = temp_voxels_.begin(); iter != temp_voxels_.end(); iter++)
         // for (VoxelKey &ck_ : keys)
         {
-            // auto iter = temp_voxels.find(ck_);
+            // auto iter = temp_voxels_.find(ck_);
             if (iter->second.is_plane)
                 continue; // 只处理非平面体素(角点候选)
 
@@ -470,7 +470,7 @@ namespace std_desc
 
                 if (!valid_plane)
                     continue;
-                // NOTE: 这里的 10 是硬编码(数值上与 config.voxel_min_point 默认值相同, 但两者并无关联)
+                // NOTE: 这里的 10 是硬编码(数值上与 config_.voxel_min_point 默认值相同, 但两者并无关联)
                 if (c_node->cloud->size() <= 10)
                     continue;
                 Eigen::Vector3d projection_normal = n_node->norm; // 投影平面法向
@@ -480,8 +480,8 @@ namespace std_desc
 
                 for (VoxelKey nk : VoxelKey::rangeNear(ck, 1, false)) // 3x3x3 邻域(exclude_self = false, 含自身)
                 {
-                    auto iter_near = temp_voxels.find(nk);
-                    if (iter_near == temp_voxels.end())
+                    auto iter_near = temp_voxels_.find(nk);
+                    if (iter_near == temp_voxels_.end())
                         continue; // 邻域体素不存在
                     if (iter_near->second.is_plane)
                         continue; // 平面体素的点不参与角点投影
@@ -522,7 +522,7 @@ namespace std_desc
         if (prepare_corner_points->size() > 0)
             // std::cout << "after nms3d: " << prepare_corner_points->size() << std::endl;
 
-        if (prepare_corner_points->size() > config.max_corner_num)
+        if (prepare_corner_points->size() > config_.max_corner_num)
         {
             /**
              * lambda 比较器: 按 intensity(角点强度)降序排序,
@@ -531,7 +531,7 @@ namespace std_desc
             std::sort(prepare_corner_points->points.begin(), prepare_corner_points->points.end(), [](pcl::PointXYZINormal &p1, pcl::PointXYZINormal &p2) -> bool
                       { return p1.intensity > p2.intensity; });
             pcl::PointCloud<pcl::PointXYZINormal>::Ptr prepare_key_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
-            prepare_key_cloud->points.assign(prepare_corner_points->points.begin(), prepare_corner_points->points.begin() + config.max_corner_num); // 截断
+            prepare_key_cloud->points.assign(prepare_corner_points->points.begin(), prepare_corner_points->points.begin() + config_.max_corner_num); // 截断
             prepare_corner_points = prepare_key_cloud;
         }
         return prepare_corner_points;
@@ -559,7 +559,7 @@ namespace std_desc
         for (size_t i = 0; i < prepare_key_cloud->size(); i++)
         {
             pcl::PointXYZINormal searchPoint = prepare_key_cloud->points[i]; // 查询点
-            if (kd_tree.radiusSearch(searchPoint, config.nms_3d_range, pointIdxRadiusSearch, pointRadiusSquaredDistance) > 0)
+            if (kd_tree.radiusSearch(searchPoint, config_.nms_3d_range, pointIdxRadiusSearch, pointRadiusSquaredDistance) > 0)
             {
                 for (size_t j = 0; j < pointIdxRadiusSearch.size(); ++j)
                 {
@@ -609,18 +609,18 @@ namespace std_desc
         pcl::KdTreeFLANN<pcl::PointXYZINormal>::Ptr kd_tree(
             new pcl::KdTreeFLANN<pcl::PointXYZINormal>); // 角点云的 KNN 索引
         kd_tree->setInputCloud(cloud);
-        std::vector<int> pointIdxNKNSearch(config.desc_search_range); // KNN 结果下标(长度会被 PCL 按实际找到的点数调整)
-        std::vector<float> pointNKNSquaredDistance(config.desc_search_range); // 对应平方距离(此处未使用)
+        std::vector<int> pointIdxNKNSearch(config_.desc_search_range); // KNN 结果下标(长度会被 PCL 按实际找到的点数调整)
+        std::vector<float> pointNKNSquaredDistance(config_.desc_search_range); // 对应平方距离(此处未使用)
         for (size_t i = 0; i < cloud->size(); i++)
         {
             pcl::PointXYZINormal searchPoint = cloud->points[i]; // 三角形第一个顶点
             // NOTE: 返回值为实际找到的邻居数, 不保证等于 desc_search_range; 而下面的循环按固定的
             // [1, desc_search_range) 下标访问结果, 当角点数少于 desc_search_range 时存在越界读风险
-            if (kd_tree->nearestKSearch(searchPoint, config.desc_search_range, pointIdxNKNSearch, pointNKNSquaredDistance) > 0)
+            if (kd_tree->nearestKSearch(searchPoint, config_.desc_search_range, pointIdxNKNSearch, pointNKNSquaredDistance) > 0)
             {
-                for (int m = 1; m < config.desc_search_range - 1; m++) // 邻居下标 1..13(下标 0 是查询点自身, 距离 0)
+                for (int m = 1; m < config_.desc_search_range - 1; m++) // 邻居下标 1..13(下标 0 是查询点自身, 距离 0)
                 {
-                    for (int n = m + 1; n < config.desc_search_range; n++) // 邻居下标 m + 1..14, 保证两个邻居不同
+                    for (int n = m + 1; n < config_.desc_search_range; n++) // 邻居下标 m + 1..14, 保证两个邻居不同
                     {
                         pcl::PointXYZINormal p1 = searchPoint; // 顶点 1(查询点)
                         pcl::PointXYZINormal p2 = cloud->points[pointIdxNKNSearch[m]]; // 顶点 2(第 m 近邻)
@@ -630,9 +630,9 @@ namespace std_desc
                         double s2 = sqrt(pow(p2.x - p3.x, 2) + pow(p2.y - p3.y, 2) + pow(p2.z - p3.z, 2)); // 边 p2-p3
                         double s3 = sqrt(pow(p3.x - p1.x, 2) + pow(p3.y - p1.y, 2) + pow(p3.z - p1.z, 2)); // 边 p3-p1
 
-                        if (s1 < config.min_side_len || s1 > config.max_side_len ||
-                            s2 < config.min_side_len || s2 > config.max_side_len ||
-                            s3 < config.min_side_len || s3 > config.max_side_len)
+                        if (s1 < config_.min_side_len || s1 > config_.max_side_len ||
+                            s2 < config_.min_side_len || s2 > config_.max_side_len ||
+                            s3 < config_.min_side_len || s3 > config_.max_side_len)
                         {
                             continue; // 任一边超出长度范围: 丢弃该三角形
                         }
@@ -686,12 +686,12 @@ namespace std_desc
     /**
      * @brief 汇总当前帧所有平面体素为一个平面点云: 每个平面体素出一个点
      *        (位置 = 平面质心, normal 字段 = 平面法向)
-     * @return 平面点云; 供 verifyGeoPlane / verifyGeoPlaneICP 几何验证使用, 并随 STDFeature 存入 cloud_vec
+     * @return 平面点云; 供 verifyGeoPlane / verifyGeoPlaneICP 几何验证使用, 并随 STDFeature 存入 cloud_vec_
      */
     pcl::PointCloud<pcl::PointXYZINormal>::Ptr STDManager::currentPlaneCloud()
     {
         pcl::PointCloud<pcl::PointXYZINormal>::Ptr ret(new pcl::PointCloud<pcl::PointXYZINormal>);
-        for (auto it = temp_voxels.begin(); it != temp_voxels.end(); it++)
+        for (auto it = temp_voxels_.begin(); it != temp_voxels_.end(); it++)
         {
             if (!it->second.is_plane)
                 continue; // 非平面体素跳过
@@ -711,13 +711,13 @@ namespace std_desc
      * @brief 单帧特征提取入口: 从原始点云到 STDFeature 的完整流水线
      *
      * 步骤:
-     *   1. 清空上一帧的 temp_voxels(与空表 swap, 同时释放内存)
+     *   1. 清空上一帧的 temp_voxels_(与空表 swap, 同时释放内存)
      *   2. buildVoxels(): 体素化 + 统计量 + 平面判定
      *   3. buildConnections(): 建立 6 邻域连接
      *   4. extractCorners(): 提取角点(2D-NMS + 3D-NMS)
      *   5. 角点存在时 buildDescriptor() 构建三角形描述子
      *   6. currentPlaneCloud(): 汇总平面点云
-     *   7. feature.id = frame_count(此处不自增, 由 insert() 自增)
+     *   7. feature.id = frame_count_(此处不自增, 由 insert() 自增)
      *
      * @param cloud 当前关键帧点云
      * @return 该帧特征
@@ -726,7 +726,7 @@ namespace std_desc
      */
     STDFeature STDManager::extract(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud)
     {
-        std::unordered_map<VoxelKey, VoxelNode, VoxelKey::Hasher>().swap(temp_voxels); // 清空并释放上一帧体素表
+        std::unordered_map<VoxelKey, VoxelNode, VoxelKey::Hasher>().swap(temp_voxels_); // 清空并释放上一帧体素表
 
         buildVoxels(cloud);
 
@@ -741,7 +741,7 @@ namespace std_desc
 
         feature.cloud = currentPlaneCloud(); // 平面点云(几何验证用)
 
-        feature.id = frame_count; // 当前帧号(自增在 insert 中)
+        feature.id = frame_count_; // 当前帧号(自增在 insert 中)
         return feature;
     }
 
@@ -749,37 +749,37 @@ namespace std_desc
      * @brief 把一帧特征写入历史数据库
      *
      * 步骤:
-     *   1. 平面点云按帧序压入 cloud_vec,
-     *      因此 cloud_vec 下标 == 帧号(verifyCandidate / pgo_node 依赖该约定)
-     *   2. 描述子 id 全部置为当前 frame_count
+     *   1. 平面点云按帧序压入 cloud_vec_,
+     *      因此 cloud_vec_ 下标 == 帧号(verifyCandidate / pgo_node 依赖该约定)
+     *   2. 描述子 id 全部置为当前 frame_count_
      *   3. 计算边长哈希桶 position = (int)(边长 / side_resolution + 0.5),
      *      对正数而言等价于四舍五入取整
-     *   4. 描述子按桶加入 data_base(按值拷贝存储, feature 本身不保留)
-     *   5. frame_count 自增, 为下一帧分配新帧号
+     *   4. 描述子按桶加入 data_base_(按值拷贝存储, feature 本身不保留)
+     *   5. frame_count_ 自增, 为下一帧分配新帧号
      *
      * @param feature 待入库特征(其 id 与内部描述子的 id 会被改写为当前帧号)
-     * @note cloud_vec 只增不减(内存随帧数持续增长)
-     * NOTE: 若某帧只 extract 不 insert, 后续帧号与 cloud_vec 下标会错位(当前 pgo_node 每帧都 insert, 满足约定)
+     * @note cloud_vec_ 只增不减(内存随帧数持续增长)
+     * NOTE: 若某帧只 extract 不 insert, 后续帧号与 cloud_vec_ 下标会错位(当前 pgo_node 每帧都 insert, 满足约定)
      */
     void STDManager::insert(STDFeature &feature)
     {
-        cloud_vec.push_back(feature.cloud); // 平面点云按帧序保存(下标即帧号)
-        feature.id = frame_count; // 以全局帧号为准覆盖
+        cloud_vec_.push_back(feature.cloud); // 平面点云按帧序保存(下标即帧号)
+        feature.id = frame_count_; // 以全局帧号为准覆盖
         for (STDDescriptor &des : feature.descs)
         {
-            des.id = frame_count; // 描述子记录所属帧号(时间过滤时使用)
+            des.id = frame_count_; // 描述子记录所属帧号(时间过滤时使用)
             VoxelKey position;
-            position.x = (int)(des.side_length[0] / config.side_resolution + 0.5); // 最短边量化后的桶下标
-            position.y = (int)(des.side_length[1] / config.side_resolution + 0.5); // 中间边
-            position.z = (int)(des.side_length[2] / config.side_resolution + 0.5); // 最长边
-            auto iter = data_base.find(position);
-            if (iter == data_base.end())
+            position.x = (int)(des.side_length[0] / config_.side_resolution + 0.5); // 最短边量化后的桶下标
+            position.y = (int)(des.side_length[1] / config_.side_resolution + 0.5); // 中间边
+            position.z = (int)(des.side_length[2] / config_.side_resolution + 0.5); // 最长边
+            auto iter = data_base_.find(position);
+            if (iter == data_base_.end())
             {
-                data_base[position] = std::vector<STDDescriptor>(); // 新桶: 先建立空列表
+                data_base_[position] = std::vector<STDDescriptor>(); // 新桶: 先建立空列表
             }
-            data_base[position].push_back(des); // 按桶存储
+            data_base_[position].push_back(des); // 按桶存储
         }
-        frame_count++; // 帧号自增, 供下一帧使用
+        frame_count_++; // 帧号自增, 供下一帧使用
     }
 
     /**
@@ -843,7 +843,7 @@ namespace std_desc
      *
      * @param feature    当前帧特征(使用其 descs 与 id)
      * @param match_list 输出候选匹配列表, 按票数从高到低
-     * @note 数据来源是 insert() 写入的 data_base; 候选的验证见 searchLoop -> verifyCandidate
+     * @note 数据来源是 insert() 写入的 data_base_; 候选的验证见 searchLoop -> verifyCandidate
      */
     void STDManager::selectCanidates(STDFeature &feature, std::vector<STDMatch> &match_list)
     {
@@ -869,33 +869,33 @@ namespace std_desc
         {
             STDDescriptor &src_std = feature.descs[i]; // 当前描述子(源)
             VoxelKey position;
-            double dis_threshold = (src_std.side_length / config.side_resolution).norm() * config.rough_dis_threshold; // 边长初筛的相对阈值
+            double dis_threshold = (src_std.side_length / config_.side_resolution).norm() * config_.rough_dis_threshold; // 边长初筛的相对阈值
 
             for (Eigen::Vector3i &voxel_inc : voxel_round) // 遍历 3x3x3 个相邻边长桶
             {
-                position.x = (int)(src_std.side_length[0] / config.side_resolution + voxel_inc[0]); // 桶下标 = 量化边长 + 整数偏移
-                position.y = (int)(src_std.side_length[1] / config.side_resolution + voxel_inc[1]);
-                position.z = (int)(src_std.side_length[2] / config.side_resolution + voxel_inc[2]);
+                position.x = (int)(src_std.side_length[0] / config_.side_resolution + voxel_inc[0]); // 桶下标 = 量化边长 + 整数偏移
+                position.y = (int)(src_std.side_length[1] / config_.side_resolution + voxel_inc[1]);
+                position.z = (int)(src_std.side_length[2] / config_.side_resolution + voxel_inc[2]);
                 Eigen::Vector3d voxel_center((double)position.x + 0.5, (double)position.y + 0.5, (double)position.z + 0.5); // 桶中心(桶坐标)
 
-                if ((src_std.side_length / config.side_resolution - voxel_center).norm() >= 1.5)
+                if ((src_std.side_length / config_.side_resolution - voxel_center).norm() >= 1.5)
                     continue; // 桶中心太远(阈值 1.5 个桶单位): 跳过
-                auto iter = data_base.find(position);
-                if (iter == data_base.end())
+                auto iter = data_base_.find(position);
+                if (iter == data_base_.end())
                     continue; // 桶不存在
 
-                for (size_t j = 0; j < data_base[position].size(); j++)
+                for (size_t j = 0; j < data_base_[position].size(); j++)
                 {
                     // NOTE: 两个 id 都是 uint64_t, 该差值为无符号; 若出现候选 id 大于当前 id 的异常顺序会下溢成极大值,
                     // 导致候选被全部误过滤
-                    if ((feature.id - data_base[position][j].id) <= config.skip_near_num)
+                    if ((feature.id - data_base_[position][j].id) <= config_.skip_near_num)
                         continue; // 跳过时间上过近的历史帧
-                    double dis = (src_std.side_length / config.side_resolution - data_base[position][j].side_length / config.side_resolution).norm(); // 缩放边长之间的欧氏距离
+                    double dis = (src_std.side_length / config_.side_resolution - data_base_[position][j].side_length / config_.side_resolution).norm(); // 缩放边长之间的欧氏距离
                     if (dis >= dis_threshold)
                         continue; // 边长差异过大
-                    double vertex_attach_diff = 2.0 * (src_std.attached - data_base[position][j].attached).norm() /
-                                                (src_std.attached + data_base[position][j].attached).norm(); // 顶点强度的相对差 2*|a-b|/|a+b|
-                    if (vertex_attach_diff >= config.vertex_diff_threshold)
+                    double vertex_attach_diff = 2.0 * (src_std.attached - data_base_[position][j].attached).norm() /
+                                                (src_std.attached + data_base_[position][j].attached).norm(); // 顶点强度的相对差 2*|a-b|/|a+b|
+                    if (vertex_attach_diff >= config_.vertex_diff_threshold)
                         continue; // 顶点强度分布差异过大(attached 为角点强度, 恒为正, 分母不为 0)
                     useful_match[i] = true; // 记录一个有效命中
                     useful_match_position[i].push_back(position);
@@ -915,7 +915,7 @@ namespace std_desc
                 continue;
             for (size_t j = 0; j < useful_match_index[i].size(); j++)
             {
-                uint64_t match_id = data_base[useful_match_position[i][j]][useful_match_index[i][j]].id; // 命中描述子所属历史帧号
+                uint64_t match_id = data_base_[useful_match_position[i][j]][useful_match_index[i][j]].id; // 命中描述子所属历史帧号
                 if (match_arr.find(match_id) == match_arr.end())
                     match_arr[match_id] = 0;
                 match_arr[match_id]++; // 该帧得票加一
@@ -924,7 +924,7 @@ namespace std_desc
             }
         }
 
-        for (int cnt = 0; cnt < config.candidate_num; cnt++) // 最多输出 candidate_num 个候选
+        for (int cnt = 0; cnt < config_.candidate_num; cnt++) // 最多输出 candidate_num 个候选
         {
 
             int max_vote = 1; // 当前发现的最高票数
@@ -952,7 +952,7 @@ namespace std_desc
                 std::pair<STDDescriptor, STDDescriptor> single_match_pair;
                 single_match_pair.first = feature.descs[index_recorder[i][0]]; // 当前帧描述子
                 single_match_pair.second =
-                    data_base[useful_match_position[index_recorder[i][0]][index_recorder[i][1]]]
+                    data_base_[useful_match_position[index_recorder[i][0]][index_recorder[i][1]]]
                              [useful_match_index[index_recorder[i][0]][index_recorder[i][1]]]; // 历史帧描述子(按记录的桶与下标取回)
                 match_triangle.match_pairs.push_back(single_match_pair);
             }
@@ -1009,7 +1009,7 @@ namespace std_desc
                 double dis_A = (A_transform - verify_pair.second.vertex_a).norm(); // 与目标顶点 A 的残差
                 double dis_B = (B_transform - verify_pair.second.vertex_b).norm(); // 与目标顶点 B 的残差
                 double dis_C = (C_transform - verify_pair.second.vertex_c).norm(); // 与目标顶点 C 的残差
-                if (dis_A < config.verify_dis_thresh && dis_B < config.verify_dis_thresh && dis_C < config.verify_dis_thresh)
+                if (dis_A < config_.verify_dis_thresh && dis_B < config_.verify_dis_thresh && dis_C < config_.verify_dis_thresh)
                     vote++; // 三顶点残差同时达标: 该匹配对支持此假设
             }
             vote_list[i] = vote;
@@ -1044,13 +1044,13 @@ namespace std_desc
             double dis_A = (A_transform - verify_pair.second.vertex_a).norm(); // 与目标顶点 A 的残差
             double dis_B = (B_transform - verify_pair.second.vertex_b).norm(); // 与目标顶点 B 的残差
             double dis_C = (C_transform - verify_pair.second.vertex_c).norm(); // 与目标顶点 C 的残差
-            if (dis_A < config.verify_dis_thresh && dis_B < config.verify_dis_thresh && dis_C < config.verify_dis_thresh)
+            if (dis_A < config_.verify_dis_thresh && dis_B < config_.verify_dis_thresh && dis_C < config_.verify_dis_thresh)
                 success_match_vec.push_back(verify_pair); // 在该位姿下一致的匹配对
         }
         // std::cout << "do verify" << std::endl;
 
-        // 平面几何验证; 注意 cloud_vec 下标 == 帧号(见 insert), 因此用 match_id 直接索引
-        return verifyGeoPlane(plane_cloud, cloud_vec[matches.match_id], rot, trans);
+        // 平面几何验证; 注意 cloud_vec_ 下标 == 帧号(见 insert), 因此用 match_id 直接索引
+        return verifyGeoPlane(plane_cloud, cloud_vec_[matches.match_id], rot, trans);
     }
 
     /**
@@ -1103,7 +1103,7 @@ namespace std_desc
 
                     // std::cout << "point_to_plane: " << point_to_plane << ":" << trans.transpose() << std::endl;
 
-                    if ((normal_inc.norm() < config.norm_merge_thresh || normal_add.norm() < config.norm_merge_thresh) && point_to_plane < config.geo_verify_dis_thresh)
+                    if ((normal_inc.norm() < config_.norm_merge_thresh || normal_add.norm() < config_.norm_merge_thresh) && point_to_plane < config_.geo_verify_dis_thresh)
                     {
                         useful_match++; // 法向平行且距离达标: 该源点匹配成功
                         break;
@@ -1169,9 +1169,9 @@ namespace std_desc
                 Eigen::Vector3d normal_add = ni + tni; // 法向和: 反向时接近 0
                 double point_to_point_dis = (pi - tpi).norm(); // 点到点距离
                 double point_to_plane = std::abs(tni.transpose() * (pi - tpi)); // 点到平面距离
-                if ((normal_inc.norm() < config.norm_merge_thresh ||
-                     normal_add.norm() < config.norm_merge_thresh) &&
-                    point_to_plane < config.geo_verify_dis_thresh && point_to_point_dis < 3) // NOTE: 点到点距离阈值 3 为硬编码
+                if ((normal_inc.norm() < config_.norm_merge_thresh ||
+                     normal_add.norm() < config_.norm_merge_thresh) &&
+                    point_to_plane < config_.geo_verify_dis_thresh && point_to_point_dis < 3) // NOTE: 点到点距离阈值 3 为硬编码
                 {
                     matched_source.emplace_back(searchPoint.x, searchPoint.y, searchPoint.z); // 保存源点原始坐标
                     matched_target.emplace_back(tpi, tni); // 保存对应目标点与法向
@@ -1187,7 +1187,7 @@ namespace std_desc
         Eigen::Matrix3d opti_rot = rot; // 待优化的旋转
         Eigen::Vector3d opti_trans = trans; // 待优化的平移
         double sum_res = -1.0; // 残差绝对值之和(-1.0 表示初始无效值)
-        for (size_t i = 0; i < config.max_iter; i++)
+        for (size_t i = 0; i < config_.max_iter; i++)
         {
             H.setZero();
             b.setZero();
@@ -1210,7 +1210,7 @@ namespace std_desc
             opti_trans += delta.block<3, 1>(3, 0); // 平移直接相加
             // NOTE: maxCoeff() 取的是最大“带符号”分量而非最大绝对值, 当各增量都是较大负值时可能提前结束;
             // 疑似应为 delta.cwiseAbs().maxCoeff() 或 delta.norm()
-            if (delta.maxCoeff() < config.iter_eps)
+            if (delta.maxCoeff() < config_.iter_eps)
                 break;
         }
         rot = opti_rot; // 输出优化后的位姿
@@ -1231,7 +1231,7 @@ namespace std_desc
      *   3. selectCanidates() 生成候选匹配列表
      *   4. 对每个候选调用 verifyCandidate() 打分, 得分更高则覆盖结果
      *      (verifyCandidate 内部输出位姿 rot/trans 与一致的描述子对)
-     *   5. 最高得分 > config.icp_thresh 才判定为有效回环
+     *   5. 最高得分 > config_.icp_thresh 才判定为有效回环
      *
      * @param feature 当前帧特征(需在 insert 之前调用, 此时 feature.id 即当前帧号)
      * @return LoopResult: valid / match_id / match_score / rotation / translation / match_pairs
@@ -1267,7 +1267,7 @@ namespace std_desc
                 result.match_pairs = sucess_match_vec;
             }
         }
-        if (result.match_score > config.icp_thresh)
+        if (result.match_score > config_.icp_thresh)
             result.valid = true; // 得分超过阈值: 判定为有效回环
         return result;
     }

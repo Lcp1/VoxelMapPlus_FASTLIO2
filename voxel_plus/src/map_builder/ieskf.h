@@ -153,7 +153,7 @@ namespace kf
     public:
         // 误差状态各块的起始下标: 位置 0 / 姿态 3 / 外参旋转 6 / 外参平移 9 / 速度 12 /
         // 陀螺零偏 15 / 加计零偏 18 / 重力(2 维) 21
-        // 外部(如 LIOBuilder 传播点协方差)靠它们索引 kf.P().block<3, 3>(kf::IESKF::R_ID, ...)
+        // 外部(如 LIOBuilder 传播点协方差)靠它们索引 kf_.P().block<3, 3>(kf::IESKF::R_ID, ...)
         static int P_ID, R_ID, ER_ID, EP_ID, V_ID, BG_ID, BA_ID, G_ID;
         // 默认构造: max_iter_ / eps_ / x_ 取类内初始值
         // NOTE: P_ 与 func_ 没有初始值 —— P_ 在使用前必须由外部赋值(LIOBuilder::initializeImu 里 setIdentity),

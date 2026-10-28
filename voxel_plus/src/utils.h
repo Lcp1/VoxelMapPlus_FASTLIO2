@@ -103,12 +103,12 @@ void calcVectQuation(const Eigen::Vector3d &norm, geometry_msgs::Quaternion &q);
 /**
  * 体素平面地图转成 rviz 可视化用的 MarkerArray
  *
- * map          : 体素地图, 只读取其 cache(LRU 链表)与 featmap(哈希表)
+ * map          : 体素地图, 只读取其 cache_(LRU 链表)与 featmap_(哈希表)
  * frame_id     : marker 所在坐标系名
  * timestamp    : 绝对时间(秒), 写进每个 marker 的 header
  * max_capacity : 本次最多检查并发布的体素平面数量(默认 1000000)
  * voxel_size   : marker 的边长(默认 0.2), lio_node.cpp 调用时传的是 voxel_size * 0.8
- * 只发布"已冻结"的平面体素(is_plane 为真且 update_enable 为假), 具体实现见 utils.cpp
+ * 只发布"已冻结"的平面体素(is_plane_ 为真且 update_enable_ 为假), 具体实现见 utils.cpp
  * 调用关系: lio_node.cpp 的 voxelTimerCB() 按 5s 周期调用, 结果发到 voxel_map 话题
  */
 visualization_msgs::MarkerArray voxel2MarkerArray(std::shared_ptr<lio::VoxelMap> map, const std::string &frame_id, const double &timestamp, int max_capacity = 1000000, double voxel_size = 0.2);

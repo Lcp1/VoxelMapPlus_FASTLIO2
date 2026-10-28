@@ -3,33 +3,33 @@
 namespace lio
 {
 
-    // 全局自增 ID 计数器, 每新建一个体素发一个唯一的 group_id
-    uint64_t VoxelGrid::count = 0;
+    // 全局自增 ID 计数器, 每新建一个体素发一个唯一的 group_id_
+    uint64_t VoxelGrid::count_ = 0;
 
     // 平面合并阈值, 实际值由 LIOBuilder 用配置覆盖
-    double VoxelGrid::merge_thresh_for_angle = 0.1;    // 夹角阈值: 1 - cos(theta)
-    double VoxelGrid::merge_thresh_for_distance = 0.04; // 平面间距阈值(原点到平面的距离差)
+    double VoxelGrid::merge_thresh_for_angle_ = 0.1;    // 夹角阈值: 1 - cos(theta)
+    double VoxelGrid::merge_thresh_for_distance_ = 0.04; // 平面间距阈值(原点到平面的距离差)
 
     /**
      * 构造函数: 记录三个阈值和体素索引, 并设置初始状态
      */
     VoxelGrid::VoxelGrid(int _max_point_thresh, int _update_point_thresh, double _plane_thresh, VoxelKey _position, VoxelMap *_map)
-        : max_point_thresh(_max_point_thresh),
-          update_point_thresh(_update_point_thresh),
-          plane_thresh(_plane_thresh),
-          position(_position.x, _position.y, _position.z)
+        : max_point_thresh_(_max_point_thresh),
+          update_point_thresh_(_update_point_thresh),
+          plane_thresh_(_plane_thresh),
+          position_(_position.x, _position.y, _position.z)
     {
-        merged = false;                                      // 尚未参与合并
-        group_id = VoxelGrid::count++;                       // 领取全局唯一 ID
-        is_init = false;                                     // 尚未初始化
-        is_plane = false;                                    // 尚未判定为平面
-        temp_points.reserve(max_point_thresh);               // 预留容量, 避免反复扩容
-        newly_add_point = 0;
-        plane = std::make_shared<Plane>();
-        update_enable = true;                                // 允许接收新点
-        map = _map;                                          // 所属地图, merge() 时查邻居
-        // center = Eigen::Vector3d(position.x + 0.5, position.y + 0.5, position.z + 0.5) * map->voxel_size;
-        // 注意: center 没有在这里初始化, 而是在 updatePlane() 成功拟合后设为 plane->mean
+        merged_ = false;                                      // 尚未参与合并
+        group_id_ = VoxelGrid::count_++;                       // 领取全局唯一 ID
+        is_init_ = false;                                     // 尚未初始化
+        is_plane_ = false;                                    // 尚未判定为平面
+        temp_points_.reserve(max_point_thresh_);               // 预留容量, 避免反复扩容
+        newly_add_point_ = 0;
+        plane_ = std::make_shared<Plane>();
+        update_enable_ = true;                                // 允许接收新点
+        map_ = _map;                                          // 所属地图, merge() 时查邻居
+        // center_ = Eigen::Vector3d(position_.x + 0.5, position_.y + 0.5, position_.z + 0.5) * map_->voxel_size_;
+        // 注意: center_ 没有在这里初始化, 而是在 updatePlane() 成功拟合后设为 plane_->mean
     }
 
     /**
@@ -40,19 +40,19 @@ namespace lio
      */
     void VoxelGrid::addToPlane(const PointWithCov &pv)
     {
-        plane->mean += (pv.point - plane->mean) / (plane->n + 1.0);
-        plane->ppt += pv.point * pv.point.transpose();
-        plane->n += 1;
+        plane_->mean += (pv.point - plane_->mean) / (plane_->n + 1.0);
+        plane_->ppt += pv.point * pv.point.transpose();
+        plane_->n += 1;
     }
 
     /**
-     * 仅累积: 统计量 + 原始点入 temp_points, 不做任何阈值判断
+     * 仅累积: 统计量 + 原始点入 temp_points_, 不做任何阈值判断
      * 供 VoxelMap::build() 批量建图使用(最后统一 updatePlane 一次)
      */
     void VoxelGrid::addPoint(const PointWithCov &pv)
     {
         addToPlane(pv);
-        temp_points.push_back(pv);
+        temp_points_.push_back(pv);
     }
 
     /**
@@ -60,43 +60,43 @@ namespace lio
      *
      * 三个分支:
      *   1) 未初始化          : 每来一个点都直接累加并尝试拟合
-     *   2) 已初始化且是平面  : update_enable 时按 update_point_thresh 周期重算,
-     *                          达到 max_point_thresh 后冻结并释放 temp_points;
+     *   2) 已初始化且是平面  : update_enable_ 时按 update_point_thresh_ 周期重算,
+     *                          达到 max_point_thresh_ 后冻结并释放 temp_points_;
      *                          冻结后转而尝试与邻居 merge()
      *   3) 已初始化但不是平面: 继续攒点并周期重算, 期望点数足够后能判定为平面
-     *                          (注意此分支在 update_enable=false 时什么都不做)
+     *                          (注意此分支在 update_enable_=false 时什么都不做)
      */
     void VoxelGrid::pushPoint(const PointWithCov &pv)
     {
-        if (!is_init)
+        if (!is_init_)
         {
             // 分支1: 尚未初始化, 攒一个点就尝试拟合一次
             // (点数不足时 updatePlane 会直接 return, 所以前期相当于纯累积)
             addToPlane(pv);
-            temp_points.push_back(pv);
+            temp_points_.push_back(pv);
             updatePlane();
         }
         else
         {
-            if (is_plane)
+            if (is_plane_)
             {
-                if (update_enable)
+                if (update_enable_)
                 {
                     // 分支2a: 平面态且可更新, 按新增点数触发重算
                     addToPlane(pv);
-                    temp_points.push_back(pv);
-                    newly_add_point++;
-                    if (newly_add_point >= update_point_thresh)
+                    temp_points_.push_back(pv);
+                    newly_add_point_++;
+                    if (newly_add_point_ >= update_point_thresh_)
                     {
                         updatePlane();
-                        newly_add_point = 0;
+                        newly_add_point_ = 0;
                     }
-                    if (temp_points.size() >= max_point_thresh)
+                    if (temp_points_.size() >= max_point_thresh_)
                     {
-                        // 点数到上限: 冻结该体素, 并释放 temp_points 以节省内存
+                        // 点数到上限: 冻结该体素, 并释放 temp_points_ 以节省内存
                         // 平面参数已经固定, 后续不再需要原始点参与计算
-                        update_enable = false;
-                        std::vector<PointWithCov>().swap(temp_points);
+                        update_enable_ = false;
+                        std::vector<PointWithCov>().swap(temp_points_);
                     }
                 }
                 else
@@ -107,21 +107,21 @@ namespace lio
             }
             else
             {
-                if (update_enable)
+                if (update_enable_)
                 {
                     // 分支3: 还不是平面, 继续攒点并周期重算
                     addToPlane(pv);
-                    temp_points.push_back(pv);
-                    newly_add_point++;
-                    if (newly_add_point >= update_point_thresh)
+                    temp_points_.push_back(pv);
+                    newly_add_point_++;
+                    if (newly_add_point_ >= update_point_thresh_)
                     {
                         updatePlane();
-                        newly_add_point = 0;
+                        newly_add_point_ = 0;
                     }
-                    if (temp_points.size() >= max_point_thresh)
+                    if (temp_points_.size() >= max_point_thresh_)
                     {
-                        update_enable = false;
-                        std::vector<PointWithCov>().swap(temp_points);
+                        update_enable_ = false;
+                        std::vector<PointWithCov>().swap(temp_points_);
                     }
                 }
             }
@@ -134,19 +134,19 @@ namespace lio
      * 步骤:
      *   1. 求样本协方差 cov = Σp*p^T / n - mean * mean^T
      *   2. 特征分解, 最小特征值对应的特征向量即平面法向
-     *   3. 若最小特征值 > plane_thresh, 认为三个方向都散开(不是平面), is_plane = false
+     *   3. 若最小特征值 > plane_thresh_, 认为三个方向都散开(不是平面), is_plane_ = false
      *   4. 协方差传播: 把 (法向量, 质心) 视作点的函数, 用雅可比链式传播
      *   5. 统一法向量朝向, 使其一致指向远离原点的一侧
      */
     void VoxelGrid::updatePlane()
     {
-        assert(temp_points.size() == plane->n); // 注意: temp_points 被 swap 清空后此断言不再成立
-        if (plane->n < update_point_thresh)
-            return; // 点数不足, 不改动状态(此时 is_init 保持 false)
-        is_init = true;
+        assert(temp_points_.size() == plane_->n); // 注意: temp_points_ 被 swap 清空后此断言不再成立
+        if (plane_->n < update_point_thresh_)
+            return; // 点数不足, 不改动状态(此时 is_init_ 保持 false)
+        is_init_ = true;
 
-        // 1. 样本协方差矩阵
-        Eigen::Matrix3d cov = plane->ppt / static_cast<double>(plane->n) - plane->mean * plane->mean.transpose();
+        // 1. 样本协方差矩阵，ppt每次添加点时都累积了 p*p^T, mean 每次添加点时都累积了 Σp/n, 所以协方差矩阵可以直接计算
+        Eigen::Matrix3d cov = plane_->ppt / static_cast<double>(plane_->n) - plane_->mean * plane_->mean.transpose();
 
         // 2. 对称特征分解; evals 升序, evals(0) 最小, 对应法向方向
         Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(cov);
@@ -154,18 +154,18 @@ namespace lio
         Eigen::Vector3d evals = es.eigenvalues();
 
         // 3. 平面判定: 最小特征值太大说明点云沿法向也有明显展布, 不是平面
-        if (evals(0) > plane_thresh)
+        if (evals(0) > plane_thresh_)
         {
-            is_plane = false;
+            is_plane_ = false;
             return;
         }
-        is_plane = true;
+        is_plane_ = true;
 
         // 4. 协方差传播
         //    J_Q: 质心对每个点的偏导 d(mean)/d(p) = I / n
-        Eigen::Matrix3d J_Q = Eigen::Matrix3d::Identity() / static_cast<double>(plane->n);
+        Eigen::Matrix3d J_Q = Eigen::Matrix3d::Identity() / static_cast<double>(plane_->n);
         Eigen::Vector3d plane_norm = evecs.col(0);
-        for (PointWithCov &pv : temp_points)
+        for (PointWithCov &pv : temp_points_)
         {
             // J 为 6x3: 上半 block 是法向量对点的偏导, 下半 block 是质心对点的偏导
             Eigen::Matrix<double, 6, 3> J;
@@ -174,7 +174,7 @@ namespace lio
             // 只对 m = 1,2 两维求和(λ0 方向即法向量自身, 无需参与)
             for (int m = 1; m < 3; m++)
             {
-                Eigen::Matrix<double, 1, 3> F_m = (pv.point - plane->mean).transpose() / ((plane->n) * (evals(0) - evals(m))) *
+                Eigen::Matrix<double, 1, 3> F_m = (pv.point - plane_->mean).transpose() / ((plane_->n) * (evals(0) - evals(m))) *
                                                   (evecs.col(m) * plane_norm.transpose() +
                                                    plane_norm * evecs.col(m).transpose());
                 F.row(m) = F_m;
@@ -182,90 +182,90 @@ namespace lio
             J.block<3, 3>(0, 0) = evecs * F;
             J.block<3, 3>(3, 0) = J_Q;
             // 累加每个点对平面协方差的贡献
-            plane->cov += J * pv.cov * J.transpose();
+            plane_->cov += J * pv.cov * J.transpose();
         }
 
         // 5. 统一法向量朝向: 使法向量指向原点所在的一侧, 避免同一平面法向反号
-        double axis_distance = -plane->mean.dot(plane_norm);
+        double axis_distance = -plane_->mean.dot(plane_norm);
         if (axis_distance < 0.0)
             plane_norm = -plane_norm;
-        plane->norm = plane_norm;
-        center = plane->mean; // 平面中心取点云质心
+        plane_->norm = plane_norm;
+        center_ = plane_->mean; // 平面中心取点云质心
     }
 
     /**
      * 与 6 邻域中已冻结的共面体素合并
      *
      * 判定条件(任一不满足则跳过):
-     *   - 不属于同一 group_id(已合并过)
-     *   - 邻居仍在更新(update_enable == true)
+     *   - 不属于同一 group_id_(已合并过)
+     *   - 邻居仍在更新(update_enable_ == true)
      *   - 邻居不是平面
-     *   - 法向量夹角过大: 1 - cos > merge_thresh_for_angle
-     *   - 两平面到原点的距离差过大: > merge_thresh_for_distance
+     *   - 法向量夹角过大: 1 - cos > merge_thresh_for_angle_
+     *   - 两平面到原点的距离差过大: > merge_thresh_for_distance_
      *
-     * 合并方式为"标记式": 只统一平面参数和 group_id, 并不搬运点集、也不删除对方体素
+     * 合并方式为"标记式": 只统一平面参数和 group_id_, 并不搬运点集、也不删除对方体素
      */
     void VoxelGrid::merge()
     {
         // 6 邻域: ±X / ±Y / ±Z
         std::vector<VoxelKey> near;
-        near.push_back(VoxelKey(position.x - 1, position.y, position.z));
-        near.push_back(VoxelKey(position.x, position.y - 1, position.z));
-        near.push_back(VoxelKey(position.x, position.y, position.z - 1));
-        near.push_back(VoxelKey(position.x + 1, position.y, position.z));
-        near.push_back(VoxelKey(position.x, position.y + 1, position.z));
-        near.push_back(VoxelKey(position.x, position.y, position.z + 1));
+        near.push_back(VoxelKey(position_.x - 1, position_.y, position_.z));
+        near.push_back(VoxelKey(position_.x, position_.y - 1, position_.z));
+        near.push_back(VoxelKey(position_.x, position_.y, position_.z - 1));
+        near.push_back(VoxelKey(position_.x + 1, position_.y, position_.z));
+        near.push_back(VoxelKey(position_.x, position_.y + 1, position_.z));
+        near.push_back(VoxelKey(position_.x, position_.y, position_.z + 1));
 
         for (VoxelKey &k : near)
         {
-            auto it = map->featmap.find(k);
-            if (it != map->featmap.end())
+            auto it = map_->featmap_.find(k);
+            if (it != map_->featmap_.end())
             {
                 std::shared_ptr<VoxelGrid> near_node = it->second;
                 // 同一组(已合并过) / 邻居还在更新 / 邻居不是平面 -> 跳过
-                if (near_node->group_id == group_id || near_node->update_enable || !near_node->is_plane)
+                if (near_node->group_id_ == group_id_ || near_node->update_enable_ || !near_node->is_plane_)
                     continue;
 
                 // 夹角判定: 1 - cos(theta)
-                double norm_distance = 1.0 - near_node->plane->norm.dot(plane->norm);
+                double norm_distance = 1.0 - near_node->plane_->norm.dot(plane_->norm);
                 // 平面间距判定: 两个平面到原点距离之差的绝对值
-                double axis_distance = std::abs(near_node->plane->norm.dot(near_node->plane->mean) - plane->norm.dot(plane->mean));
+                double axis_distance = std::abs(near_node->plane_->norm.dot(near_node->plane_->mean) - plane_->norm.dot(plane_->mean));
 
-                if (norm_distance > merge_thresh_for_angle || axis_distance > merge_thresh_for_distance)
+                if (norm_distance > merge_thresh_for_angle_ || axis_distance > merge_thresh_for_distance_)
                     continue;
 
                 // 以两平面协方差的迹作为权重
                 // 注意 block(0,0) 是法向量协方差, block(3,3) 是质心协方差
-                double tn0 = plane->cov.block<3, 3>(0, 0).trace(),
-                       tm0 = plane->cov.block<3, 3>(3, 3).trace(),
-                       tn1 = near_node->plane->cov.block<3, 3>(0, 0).trace(),
-                       tm1 = near_node->plane->cov.block<3, 3>(3, 3).trace();
+                double tn0 = plane_->cov.block<3, 3>(0, 0).trace(),
+                       tm0 = plane_->cov.block<3, 3>(3, 3).trace(),
+                       tn1 = near_node->plane_->cov.block<3, 3>(0, 0).trace(),
+                       tm1 = near_node->plane_->cov.block<3, 3>(3, 3).trace();
                 double tc0 = tn0 + tm0, tc1 = tn1 + tm1;
                 // NOTE: 下面两行疑似缺少括号, 按运算符优先级等价于
                 //   tm0 * mean1 + (tm1 * mean2) / (tm0 + tm1)
                 // 而加权平均的本意应为 (tm0 * mean1 + tm1 * mean2) / (tm0 + tm1), 建议核对
-                Eigen::Vector3d new_mean = tm0 * near_node->plane->mean + tm1 * plane->mean / (tm0 + tm1);
-                Eigen::Vector3d new_norm = tn0 * near_node->plane->norm + tn1 * plane->norm / (tn0 + tn1);
+                Eigen::Vector3d new_mean = tm0 * near_node->plane_->mean + tm1 * plane_->mean / (tm0 + tm1);
+                Eigen::Vector3d new_norm = tn0 * near_node->plane_->norm + tn1 * plane_->norm / (tn0 + tn1);
                 // 按权重融合两平面的 6x6 协方差
-                Eigen::Matrix<double, 6, 6> new_cov = (tc0 * tc0 * near_node->plane->cov + tc1 * tc1 * plane->cov) / ((tc0 + tc1) * (tc0 + tc1));
+                Eigen::Matrix<double, 6, 6> new_cov = (tc0 * tc0 * near_node->plane_->cov + tc1 * tc1 * plane_->cov) / ((tc0 + tc1) * (tc0 + tc1));
 
-                // 打上相同的 group_id, 避免后续重复合并
-                near_node->group_id = group_id;
-                merged = true;
-                near_node->merged = true;
+                // 打上相同的 group_id_, 避免后续重复合并
+                near_node->group_id_ = group_id_;
+                merged_ = true;
+                near_node->merged_ = true;
 
                 // 统一法向量朝向
                 if (-new_mean.dot(new_norm) < 0.0)
                     new_norm = -new_norm;
 
                 // 把融合结果同时写给自己和邻居, 使二者参数完全一致
-                plane->mean = new_mean;
-                plane->norm = new_norm;
-                plane->cov = new_cov;
+                plane_->mean = new_mean;
+                plane_->norm = new_norm;
+                plane_->cov = new_cov;
 
-                near_node->plane->mean = new_mean;
-                near_node->plane->norm = new_norm;
-                near_node->plane->cov = new_cov;
+                near_node->plane_->mean = new_mean;
+                near_node->plane_->norm = new_norm;
+                near_node->plane_->cov = new_cov;
             }
         }
     }
@@ -273,19 +273,19 @@ namespace lio
     /**
      * 构造函数: 保存体素化参数, 清空地图和 LRU 链表
      */
-    VoxelMap::VoxelMap(int _max_point_thresh, int _update_point_thresh, double _plane_thresh, double _voxel_size, int _capacity) : max_point_thresh(_max_point_thresh), update_point_thresh(_update_point_thresh), plane_thresh(_plane_thresh), voxel_size(_voxel_size), capacity(_capacity)
+    VoxelMap::VoxelMap(int _max_point_thresh, int _update_point_thresh, double _plane_thresh, double _voxel_size, int _capacity) : max_point_thresh_(_max_point_thresh), update_point_thresh_(_update_point_thresh), plane_thresh_(_plane_thresh), voxel_size_(_voxel_size), capacity_(_capacity)
     {
-        featmap.clear();
-        cache.clear();
+        featmap_.clear();
+        cache_.clear();
     }
 
     /**
-     * 世界坐标 -> 体素索引: floor(point / voxel_size)
+     * 世界坐标 -> 体素索引: floor(point / voxel_size_)
      * 先 floor 再转 int64, 保证负坐标也落在正确的体素里(直接截断会出错)
      */
     VoxelKey VoxelMap::index(const Eigen::Vector3d &point)
     {
-        Eigen::Vector3d idx = (point / voxel_size).array().floor();
+        Eigen::Vector3d idx = (point / voxel_size_).array().floor();
         return VoxelKey(static_cast<int64_t>(idx(0)), static_cast<int64_t>(idx(1)), static_cast<int64_t>(idx(2)));
     }
 
@@ -293,43 +293,43 @@ namespace lio
      * 初始化建图(用于首帧点云)
      *
      * 对每个点:
-     *   - 体素不存在则新建, 压入 LRU 链表头部并记录 cache_it;
-     *     若链表长度超过 capacity, 从尾部淘汰最久未使用的体素
+     *   - 体素不存在则新建, 压入 LRU 链表头部并记录 cache_it_;
+     *     若链表长度超过 capacity_, 从尾部淘汰最久未使用的体素
      *   - 体素已存在则用 splice 把自己提到链表头部(标记为最近使用, O(1))
      *   - addPoint 只累积, 不做阈值判断
-     * 所有点处理完后, 遍历整个 featmap 统一调用一次 updatePlane()
+     * 所有点处理完后, 遍历整个 featmap_ 统一调用一次 updatePlane()
      */
     void VoxelMap::build(std::vector<PointWithCov> &pvs)
     {
         for (PointWithCov &pv : pvs)
         {
             VoxelKey k = index(pv.point);
-            auto it = featmap.find(k);
-            if (it == featmap.end())
+            auto it = featmap_.find(k);
+            if (it == featmap_.end())
             {
                 // 新体素: 建对象 + 记录 LRU 位置
-                featmap[k] = std::make_shared<VoxelGrid>(max_point_thresh, update_point_thresh, plane_thresh, k, this);
-                cache.push_front(k);
-                featmap[k]->cache_it = cache.begin();
+                featmap_[k] = std::make_shared<VoxelGrid>(max_point_thresh_, update_point_thresh_, plane_thresh_, k, this);
+                cache_.push_front(k);
+                featmap_[k]->cache_it_ = cache_.begin();
 
                 // 超出容量: 淘汰链表尾部(最久未使用)的体素
-                if (cache.size() > capacity)
+                if (cache_.size() > capacity_)
                 {
-                    featmap.erase(cache.back());
-                    cache.pop_back();
+                    featmap_.erase(cache_.back());
+                    cache_.pop_back();
                 }
             }
             else
             {
                 // 已存在: 提到 LRU 链表头部, 标记为最近使用
-                cache.splice(cache.begin(), cache, featmap[k]->cache_it);
+                cache_.splice(cache_.begin(), cache_, featmap_[k]->cache_it_);
             }
 
-            featmap[k]->addPoint(pv);
+            featmap_[k]->addPoint(pv);
         }
 
         // 建图结束后统一拟合平面
-        for (auto it = featmap.begin(); it != featmap.end(); it++)
+        for (auto it = featmap_.begin(); it != featmap_.end(); it++)
         {
             it->second->updatePlane();
         }
@@ -348,24 +348,24 @@ namespace lio
         for (PointWithCov &pv : pvs)
         {
             VoxelKey k = index(pv.point);
-            auto it = featmap.find(k);
-            if (it == featmap.end())
+            auto it = featmap_.find(k);
+            if (it == featmap_.end())
             {
-                featmap[k] = std::make_shared<VoxelGrid>(max_point_thresh, update_point_thresh, plane_thresh, k, this);
-                cache.push_front(k);
-                featmap[k]->cache_it = cache.begin();
-                if (cache.size() > capacity)
+                featmap_[k] = std::make_shared<VoxelGrid>(max_point_thresh_, update_point_thresh_, plane_thresh_, k, this);
+                cache_.push_front(k);
+                featmap_[k]->cache_it_ = cache_.begin();
+                if (cache_.size() > capacity_)
                 {
-                    featmap.erase(cache.back());
-                    cache.pop_back();
+                    featmap_.erase(cache_.back());
+                    cache_.pop_back();
                 }
             }
             else
             {
-                cache.splice(cache.begin(), cache, featmap[k]->cache_it);
+                cache_.splice(cache_.begin(), cache_, featmap_[k]->cache_it_);
             }
             // 增量插入: 由体素内部状态机决定是否重算平面或与邻居合并
-            featmap[k]->pushPoint(pv);
+            featmap_[k]->pushPoint(pv);
         }
     }
 
@@ -382,13 +382,13 @@ namespace lio
     bool VoxelMap::buildResidual(ResidualData &data, std::shared_ptr<VoxelGrid> voxel_grid)
     {
         data.is_valid = false;
-        if (voxel_grid->is_plane)
+        if (voxel_grid->is_plane_)
         {
             // 点到平面质心的向量
-            Eigen::Vector3d p2m = (data.point_world - voxel_grid->plane->mean);
+            Eigen::Vector3d p2m = (data.point_world - voxel_grid->plane_->mean);
             // 回填平面参数, 供 IESKF 使用
-            data.plane_norm = voxel_grid->plane->norm;
-            data.plane_mean = voxel_grid->plane->mean;
+            data.plane_norm = voxel_grid->plane_->norm;
+            data.plane_mean = voxel_grid->plane_->mean;
             // 残差 = 点到平面的有符号距离
             data.residual = data.plane_norm.dot(p2m);
 
